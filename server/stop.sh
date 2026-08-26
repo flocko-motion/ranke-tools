@@ -2,10 +2,11 @@
 # Stop the dev server run.sh started in the background, via its pid file.
 #
 # Usage: server/stop.sh
+#        PORT=8123 server/stop.sh   # stop the instance run.sh was given the same PORT for
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PID_FILE="$DIR/.rankedb.pid"
+PID_FILE="$DIR/.rankedb${PORT:+.$PORT}.pid"
 
 if [ ! -f "$PID_FILE" ]; then
 	echo "stop.sh: not running (no $PID_FILE)"
