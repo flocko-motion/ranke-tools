@@ -10,7 +10,7 @@ import (
 
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "gitbackup.yaml")
+	path := filepath.Join(t.TempDir(), "ranke-git.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

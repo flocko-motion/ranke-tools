@@ -13,8 +13,9 @@ One Go module, one subdirectory per tool.
 
 ## Tools
 
-- [`gitbackup`](./gitbackup/) — archives an exact git tree (or a repo's full history) into
-  a Ranke-Graph archive, byte-exact and content-deduplicated.
+- [`ranke-git`](./ranke-git/) — archives an exact git tree (or a repo's full history)
+  into a Ranke-Graph archive, byte-exact and content-deduplicated, and attaches
+  arbitrary content (build logs, artifacts, reports) onto an archived commit.
 
 ## Running a dev server
 

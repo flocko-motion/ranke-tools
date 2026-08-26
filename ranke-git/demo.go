@@ -1,6 +1,6 @@
-// package: main / gitbackup
+// package: main / ranke-git
 // type:    entrypoint
-// job:     `gitbackup demo` — a small multi-commit, multi-branch, tagged repo, backed up
+// job:     `ranke-git demo` — a small multi-commit, multi-branch, tagged repo, backed up
 // and restored, both kept on disk to look at — illustrative only, not one of the tool's
 // two real actions
 // limits:  no ranke-db, same as the rest of phase one (-> convert_test.go for real coverage)
@@ -35,7 +35,7 @@ func demoCmd() *cobra.Command {
 // never-cleaned-up paths. The tests are the real coverage; this is for a
 // human to look at.
 func runDemo(out io.Writer) error {
-	base, err := os.MkdirTemp("", "gitbackup-demo-")
+	base, err := os.MkdirTemp("", "ranke-git-demo-")
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func runDemo(out io.Writer) error {
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
 	claims, err := backupToClaims(ctx, g, refs, u, contributor, signer,
-		"https://example.com/demo/gitbackup.git", "gitbackup-demo", prep{})
+		"https://example.com/demo/ranke-git.git", "ranke-git-demo", prep{})
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func demoBuildRepo(dir string) (gitRepo, []refSpec, error) {
 	}
 
 	if err := demoCommit(g, []demoFile{
-		{"README.md", "gitbackup demo\n", 0o644},
+		{"README.md", "ranke-git demo\n", 0o644},
 		{"bin/run.sh", "#!/bin/sh\necho hi\n", 0o755},
 	}, "first commit"); err != nil {
 		return gitRepo{}, nil, err

@@ -1,7 +1,7 @@
-// package: main / gitbackup
+// package: main / ranke-git
 // type:    logic
-// job:     wires one action together: load the contributor, prepare (crif + content_hash
-// scan), build claims, contribute only what's new
+// job:     wires one action together: connect, prepare (crif + content_hash scan) where
+// an action needs it, build claims, contribute only what's new
 // limits:  orchestration only; the pieces it calls own their own concerns
 package main
 
@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -57,47 +58,81 @@ func loadContributor(ctx context.Context, c *client, branch, id string, key ed25
 	return self, nil
 }
 
-// shapeFunc builds one action's claims, once the contributor, signer, and
-// prep are ready.
-type shapeFunc func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep) ([]ranke.Claim, error)
+// session is what every action needs before it does its own work: a live
+// client and a bound contributor to sign as.
+type session struct {
+	client      *client
+	contributor ranke.Contributor
+	signer      crypto.Signer
+}
 
-// run resolves the contributor, prepares (crif + content_hash scan), asks
-// shape to build claims, then contributes only what's new — the three
-// phases the whole tool is built around (-> DESIGN.md).
-func run(cmd *cobra.Command, o *options, shape shapeFunc) error {
-	ctx := cmd.Context()
+// connect loads the signing key, waits for the server, and binds the
+// contributor claim o names — the setup every action shares.
+func connect(ctx context.Context, o *options) (*session, error) {
 	if o.server == "" {
-		return fmt.Errorf("--server is required")
+		return nil, fmt.Errorf("--server is required")
 	}
 	if o.contributorID == "" || o.signingKey == "" {
-		return fmt.Errorf("--contributor-id and --signing-key are required")
+		return nil, fmt.Errorf("--contributor-id and --signing-key are required")
 	}
-	if o.repoURL == "" || o.project == "" {
-		return fmt.Errorf("--repo and --project are required")
-	}
-
 	key, err := loadSigningKey(o.signingKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c := newClient(o.server, o.token, o.apiKey)
 	if err := c.waitReady(ctx, 10*time.Second); err != nil {
-		return fmt.Errorf("%s: %w", o.server, err)
+		return nil, fmt.Errorf("%s: %w", o.server, err)
 	}
 	contributor, err := loadContributor(ctx, c, o.branch, o.contributorID, key)
+	if err != nil {
+		return nil, err
+	}
+	return &session{client: c, contributor: contributor, signer: key}, nil
+}
+
+// contributeAndReport advances the dev clock, merges claims, and prints what
+// landed — the last step every action shares. u is where an externally-
+// content claim's bytes are read back from before they go out on the wire.
+func contributeAndReport(ctx context.Context, c *client, u ranke.Universe, branch string, claims []ranke.Claim, out io.Writer) error {
+	if err := c.advanceClock(ctx, time.Now().UTC().Add(time.Minute)); err != nil {
+		return err
+	}
+	res, err := c.contribute(ctx, u, branch, claims)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, ">> merged %d claim(s) onto %q, head %s\n", len(res.Ids), branch, res.Head)
+	return nil
+}
+
+// shapeFunc builds one action's claims into u, once the contributor,
+// signer, and prep are ready.
+type shapeFunc func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep, u ranke.Universe) ([]ranke.Claim, error)
+
+// run connects, prepares (crif + content_hash scan), asks shape to build
+// claims, then contributes only what's new — the three phases the whole
+// tool is built around (-> DESIGN.md). For snapshot/backup specifically;
+// attach has no repository/project and does its own, simpler thing.
+func run(cmd *cobra.Command, o *options, shape shapeFunc) error {
+	ctx := cmd.Context()
+	if o.repoURL == "" || o.project == "" {
+		return fmt.Errorf("--repo and --project are required")
+	}
+	s, err := connect(ctx, o)
 	if err != nil {
 		return err
 	}
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, ">> preparing — crif %s/%s, scanning existing content on %q\n", o.repoURL, o.project, o.branch)
-	p, err := prepare(ctx, c, o.branch, o.repoURL, o.project)
+	p, err := prepare(ctx, s.client, o.branch, o.repoURL, o.project)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(out, ">> %d known object(s) to reuse\n", len(p.knownHashes))
 
-	claims, err := shape(ctx, contributor, key, p)
+	u := ranke.NewMemoryUniverse()
+	claims, err := shape(ctx, s.contributor, s.signer, p, u)
 	if err != nil {
 		return err
 	}
@@ -105,16 +140,7 @@ func run(cmd *cobra.Command, o *options, shape shapeFunc) error {
 		fmt.Fprintln(out, ">> nothing new — everything was already archived")
 		return nil
 	}
-
-	if err := c.advanceClock(ctx, time.Now().UTC().Add(time.Minute)); err != nil {
-		return err
-	}
-	res, err := c.contribute(ctx, o.branch, claims)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(out, ">> merged %d claim(s) onto %q, head %s\n", len(res.Ids), o.branch, res.Head)
-	return nil
+	return contributeAndReport(ctx, s.client, u, o.branch, claims, out)
 }
 
 // localRepo resolves the git repo this run reads from: --clone if given.

@@ -18,8 +18,8 @@ BROKKR            := $(TOOLS_BIN)/brokkr
 BROKKR_INSTALL_SH := https://raw.githubusercontent.com/flocko-motion/sindri/master/scripts/install-brokkr.sh
 
 # One binary per top-level tool directory — add a name here when a new tool joins
-# gitbackup, rather than hand-writing a second build recipe for it.
-TOOLS := gitbackup
+# ranke-git, rather than hand-writing a second build recipe for it.
+TOOLS := ranke-git
 
 RANKE_DB_REPO ?= flocko-motion/ranke-db
 
@@ -39,7 +39,7 @@ build: ## Build every tool's binary into bin/
 		go build -o bin/$$t ./$$t || exit 1; \
 	done
 
-test: ## Test all packages; scope with make test/<pkg> (e.g. test/gitbackup)
+test: ## Test all packages; scope with make test/<pkg> (e.g. test/ranke-git)
 	@echo ">> go test ./..."
 	@go test ./...
 

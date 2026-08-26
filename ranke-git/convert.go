@@ -1,4 +1,4 @@
-// package: main / gitbackup
+// package: main / ranke-git
 // type:    logic
 // job:     converts git state to Ranke claims and back, byte-exact (-> DESIGN.md)
 // limits:  local only — no ranke-db reads or writes; the client that talks to one

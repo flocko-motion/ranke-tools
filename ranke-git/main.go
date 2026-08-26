@@ -1,6 +1,6 @@
-// package: main / gitbackup
+// package: main / ranke-git
 // type:    entrypoint
-// job:     the gitbackup binary — archives git state into a running ranke-db as a client
+// job:     the ranke-git binary — archives git state into a running ranke-db as a client
 // limits:  a client only, over the documented REST contract; no dependency on ranke-db
 // itself, only on ranke-go (-> DESIGN.md)
 package main
@@ -19,7 +19,7 @@ import (
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "gitbackup:", err)
+		fmt.Fprintln(os.Stderr, "ranke-git:", err)
 		os.Exit(1)
 	}
 }
@@ -90,11 +90,11 @@ func (o *options) loadConfig(cmd *cobra.Command) error {
 	return nil
 }
 
-// rootCmd builds the gitbackup command tree: one subcommand per action.
+// rootCmd builds the ranke-git command tree: one subcommand per action.
 func rootCmd() *cobra.Command {
 	var o options
 	root := &cobra.Command{
-		Use:           "gitbackup",
+		Use:           "ranke-git",
 		Short:         "Archive git state into a running ranke-db, byte-exact and content-deduplicated",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -114,7 +114,7 @@ func rootCmd() *cobra.Command {
 	f.StringVar(&o.project, "project", "", "the project name — its own entity, distinct from the repo (required)")
 	f.StringVar(&o.branch, "branch", "main", "the ranke-db branch this run contributes onto")
 	f.StringSliceVar(&o.paths, "path", nil, "restrict to this path within the repo (repeatable; monorepo subset)")
-	root.AddCommand(snapshotCmd(&o), backupCmd(&o), demoCmd())
+	root.AddCommand(snapshotCmd(&o), backupCmd(&o), attachCmd(&o), demoCmd())
 	return root
 }
 
@@ -133,8 +133,8 @@ func snapshotCmd(o *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return run(cmd, o, func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep) ([]ranke.Claim, error) {
-				return gitToClaims(ctx, g, ref, o.paths, ranke.NewMemoryUniverse(), contributor, signer, o.repoURL, o.project, p)
+			return run(cmd, o, func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep, u ranke.Universe) ([]ranke.Claim, error) {
+				return gitToClaims(ctx, g, ref, o.paths, u, contributor, signer, o.repoURL, o.project, p)
 			})
 		},
 	}
@@ -165,8 +165,8 @@ func backupCmd(o *options) *cobra.Command {
 			for _, t := range tags {
 				refs = append(refs, refSpec{kind: "tag", name: t})
 			}
-			return run(cmd, o, func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep) ([]ranke.Claim, error) {
-				return backupToClaims(ctx, g, refs, ranke.NewMemoryUniverse(), contributor, signer, o.repoURL, o.project, p)
+			return run(cmd, o, func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep, u ranke.Universe) ([]ranke.Claim, error) {
+				return backupToClaims(ctx, g, refs, u, contributor, signer, o.repoURL, o.project, p)
 			})
 		},
 	}

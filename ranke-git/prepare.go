@@ -1,4 +1,4 @@
-// package: main / gitbackup
+// package: main / ranke-git
 // type:    logic
 // job:     the preparational phase — crif the repository/project entities and scan
 // existing content_hash values, before the build phase mints anything new

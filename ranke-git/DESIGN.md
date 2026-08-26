@@ -1,9 +1,9 @@
-# gitbackup — design notes
+# ranke-git — design notes
 
 ## Use case
 
 Git is not immutable — a force-push or a squash can erase history a project once
-depended on. `gitbackup` archives git state into a Ranke-Graph so it survives that,
+depended on. `ranke-git` archives git state into a Ranke-Graph so it survives that,
 in two modes that share one mechanism:
 
 - **snapshot** — the exact source an artifact was built from: one commit's tree
@@ -91,6 +91,66 @@ path back to a source (`D1`), satisfied once, at creation:
   no reified `relation/*` node; reification is for genuine n:n relations between
   entities (foundation paper §Relations).
 
+## Attachments
+
+`ranke-git attach` cites arbitrary content onto an already-archived commit — a
+build log, a test report, a scan's output, a platform-specific artifact binary.
+The driving case: after release CI, `snapshot` the repo, then `attach` its logs
+and its build outputs against the same commit.
+
+Every attachment is a `source` claim, no exceptions, however different its
+*content* is from a log. `ranke-git` never parses what it's carrying — the
+release-process generator in `ranke-db` classifies a vulnerability *scan* as a
+`derivation` (it interprets source code against known CVEs and links the
+entities it matched), but that tool knows the semantic content and deliberately
+builds that graph; `ranke-git` doesn't, anywhere, and attach is no exception.
+A scanner's raw output, attached here, is exactly as uninterpreted as a build
+log or a Windows-vs-Linux artifact pair — `source`, all of it, unconditionally.
+
+Two axes, both settable, kept independent:
+
+- `--type` sets the subtype, always assembled as `source/rankegit_<type>` —
+  never a bare `--type` string, and never a class other than `source`. The
+  `rankegit_` prefix exists because the subtype vocabulary is open
+  archive-wide (`V-TYPE`): a bare word like "log" or "advisory" is exactly what
+  another tool might mean something else by, and the list of kinds here (logs,
+  test results, scan output, per-platform artifacts...) is open-ended by
+  design, so there's no fixed enum to validate against instead. `subtypeChars`
+  enforces the ADT's own character rule (`checkSubtype`, shared with
+  `R-FIELDS`' field-name shape: `[a-z0-9][a-z0-9_]*`) before any network round
+  trip, so a bad `--type` fails immediately, not inside the library.
+- `--content-type` is the attachment's actual MIME encoding — free-form,
+  independent of `--type`, since a `build_log` could be `text/plain` today and
+  something else tomorrow.
+
+`--name` is the human title either way — a log's caption or an artifact's
+filename, the same field `entity/project` and `source/ref` already use for the
+same purpose.
+
+The claim cites its target via `relation/attached_to` (`RelationTo`) — a
+relation, not a `derivation/input`: the attachment isn't an interpretation of
+the commit's content, it's evidence associated with the same point in time,
+the same shape as the release generator's `relation/mentions`. Content is
+always external, same as every other git-object claim, so two identical
+attachments (a log rerun byte-for-byte) share one `content_hash`. No git repo
+is touched — `attach` finds its target purely by querying the branch for the
+`source/commit` claim with a matching `git_sha` (`findOne`, the same helper
+crif uses), then contributes one claim. `--file` or stdin supplies the bytes.
+
+## Sending content
+
+`WriteClaim` carries only a claim's own record — for external content that's
+just `content_hash`/`content_size`, never the bytes. `client.contribute`
+separately calls `WriteContent` for every externally-content claim in the
+batch (deduped by hash within the batch itself, so a blob two claims share
+goes out once), reading the bytes back from the same Universe the build phase
+wrote them into. Missing this was a real, confirmed bug for a while: the
+claim records reached the server and even satisfied re-run dedup (which only
+ever reads the `content_hash` *field*, never fetches the bytes it names), so
+everything *looked* correct while every blob's actual content was silently
+absent server-side. Caught by fetching a blob's content back after a live
+contribute and getting a 404; fixed, and now the same fetch returns the bytes.
+
 ## Dedup within one run
 
 `bySha` memoises every commit, tree, blob, and tag by git sha, so
@@ -134,5 +194,12 @@ it, and the new commit — three claims, not the whole tree again.
 - Whether `entity/artifact` (an artifact as its own stable, referenceable thing —
   D1-anchored to a `derivation/build` citing the snapshot) is worth adding now or
   only once something actually needs to query artifacts as things across builds.
+  `attach` covers "carry the bytes" today; it doesn't give an artifact its own
+  identity to reference from elsewhere.
+- Content-hash reuse across separate `attach` runs. Unlike `snapshot`/`backup`,
+  `attach` never consults `prepare`'s `knownHashes` — attaching the same log
+  twice mints two claims, not one reused. Likely fine (an attachment is tied to
+  one run, not expected to repeat the way an unchanged file does), but untested
+  either way.
 - Encoding a submodule (gitlink, mode 160000) — currently refused outright
   (`TestSubmoduleIsRefused`).

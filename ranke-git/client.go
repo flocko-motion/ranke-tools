@@ -1,6 +1,6 @@
-// package: main / gitbackup
+// package: main / ranke-git
 // type:    io
-// job:     the REST client gitbackup talks to a running ranke-db through
+// job:     the REST client ranke-git talks to a running ranke-db through
 // limits:  transport only, over the documented contract — never imports ranke-db itself,
 // only ranke-go for wire encoding (-> DESIGN.md, README.md)
 package main
@@ -44,7 +44,7 @@ func newClient(base, token, apiKey string) *client {
 }
 
 // contributionResult mirrors POST /contribute's response — hand-written
-// rather than imported, since gitbackup depends on ranke-go, never ranke-db.
+// rather than imported, since ranke-git depends on ranke-go, never ranke-db.
 type contributionResult struct {
 	Head string   `json:"head"`
 	Ids  []string `json:"ids"`
@@ -65,9 +65,11 @@ func (e *apiRefusal) Error() string {
 	return fmt.Sprintf("http %d: %s", e.status, e.msg)
 }
 
-// contribute merges claims onto branch and returns the new head and the ids
-// that landed. An empty claims list is a no-op — everything was reused.
-func (c *client) contribute(ctx context.Context, branch string, claims []ranke.Claim) (contributionResult, error) {
+// contribute merges claims onto branch, returning the new head and the ids
+// that landed (empty claims is a no-op). WriteClaim carries only a claim's
+// record, referencing content_hash — u is where an external claim's bytes
+// are read back from, to send alongside it.
+func (c *client) contribute(ctx context.Context, u ranke.Universe, branch string, claims []ranke.Claim) (contributionResult, error) {
 	var res contributionResult
 	if len(claims) == 0 {
 		return res, nil
@@ -76,10 +78,30 @@ func (c *client) contribute(ctx context.Context, branch string, claims []ranke.C
 	w := ranke.NewWireWriter(&buf, ranke.WireConstraints{
 		Branches: []string{branch}, Referencable: []string{branch}, Creatable: []string{branch},
 	})
+	sent := map[string]bool{} // content_hash already written, so a blob two claims share goes out once
 	for _, claim := range claims {
 		if err := w.WriteClaim(branch, claim); err != nil {
 			return res, fmt.Errorf("encode claim %s: %w", claim.ID(), err)
 		}
+		if claim.Node().ContentKind() != ranke.ContentExternal {
+			continue
+		}
+		hash := claim.Node().GetContentHash()
+		if sent[hash.String()] {
+			continue
+		}
+		r, err := claim.GetContent(ctx, u)
+		if err != nil {
+			return res, fmt.Errorf("read content for claim %s: %w", claim.ID(), err)
+		}
+		payload, err := io.ReadAll(r)
+		if err != nil {
+			return res, fmt.Errorf("read content for claim %s: %w", claim.ID(), err)
+		}
+		if err := w.WriteContent(ranke.ContentBlob{Hash: hash, Content: payload}); err != nil {
+			return res, fmt.Errorf("encode content for claim %s: %w", claim.ID(), err)
+		}
+		sent[hash.String()] = true
 	}
 	out, _, err := c.do(ctx, http.MethodPost, "/contribute", mediaCBORSeq, buf.Bytes())
 	if err != nil {
@@ -91,10 +113,8 @@ func (c *client) contribute(ctx context.Context, branch string, claims []ranke.C
 	return res, nil
 }
 
-// advanceClock steers a --dev server's clock to at, so a contribution dated
-// around now is accepted — the merge base only advances through this route.
-// A production server has none, so a 404/501 here is silently swallowed: one
-// binary works unmodified against a dev or a production server alike.
+// advanceClock steers a --dev server's clock to at. A production server has
+// no such route, so a 404/501 here is silently swallowed.
 func (c *client) advanceClock(ctx context.Context, at time.Time) error {
 	body, err := json.Marshal(struct {
 		Time time.Time `json:"time"`
@@ -110,9 +130,9 @@ func (c *client) advanceClock(ctx context.Context, at time.Time) error {
 	return err
 }
 
-// queryRecord is one query result — gitbackup's own minimal projection, not
-// a ranke.Claim: a query answers with a read-only JSON view, never the signed
-// envelope a Claim decodes from.
+// queryRecord is one query result — ranke-git's own minimal projection, not
+// a ranke.Claim: a read-only JSON view, never the signed envelope a Claim
+// decodes from.
 type queryRecord struct {
 	ID          string            `json:"id"`
 	Type        string            `json:"type"`
@@ -122,8 +142,7 @@ type queryRecord struct {
 }
 
 // query runs an RQL read and decodes its json-seq result. A branch that
-// doesn't exist yet (nothing contributed there so far) answers empty, not an
-// error — there is simply nothing to reuse.
+// doesn't exist yet answers empty, not an error.
 func (c *client) query(ctx context.Context, q ranke.Query) ([]queryRecord, error) {
 	body, err := ranke.EncodeQuery(q)
 	if err != nil {
@@ -159,8 +178,7 @@ func decodeSeq(body []byte) ([]queryRecord, error) {
 }
 
 // getClaim fetches one claim's stored envelope by id and decodes it — the
-// only way to reach a real ranke.Claim, rather than a query's read-only JSON
-// projection. Needed once: to hand the library a Contributor to sign as.
+// only way to reach a real ranke.Claim, not just a query's JSON projection.
 func (c *client) getClaim(ctx context.Context, branch, id string) (ranke.Claim, error) {
 	parsed, err := ranke.ParseId(id)
 	if err != nil {
@@ -173,9 +191,8 @@ func (c *client) getClaim(ctx context.Context, branch, id string) (ranke.Claim, 
 	return ranke.DecodeClaim(parsed, out)
 }
 
-// waitReady polls /health so a script can talk to a server without sleeping
-// a guessed interval. A refusal other than a missing listener stops the
-// wait, retrying it never succeeding.
+// waitReady polls /health rather than sleeping a guessed interval. A
+// refusal other than a missing listener stops the wait.
 func (c *client) waitReady(ctx context.Context, within time.Duration) error {
 	deadline := time.Now().Add(within)
 	for {

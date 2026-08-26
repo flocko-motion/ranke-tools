@@ -1,4 +1,4 @@
-# gitbackup config — an alternative to typing every flag by hand.
+# ranke-git config — an alternative to typing every flag by hand.
 #
 # Copy this file, fill it in, and pass --config path/to/it.yaml. Any flag given
 # on the command line still wins over what's here, so a shared config plus a
