@@ -1,8 +1,7 @@
 // package: main / gitbackup
 // type:    logic
 // job:     converts one git commit to Ranke claims and back, byte-exact (-> DESIGN.md)
-// limits:  local only — no ranke-db, no network; the Universe here is a client-side
-// scratch content store, not persistence (-> gitobj.go for raw git access)
+// limits:  local only — no ranke-db, no network (-> gitobj.go for raw git access)
 package main
 
 import (
@@ -15,36 +14,34 @@ import (
 	"github.com/flocko-motion/ranke-go"
 )
 
-// The claim types this conversion produces — all `source`, none of it interpreted
-// (-> DESIGN.md, "capture, not interpretation, all the way down").
+// The claim types this conversion produces.
 const (
-	nodeCommit = "source/commit"
-	nodeTree   = "source/tree"
-	nodeBlob   = "source/blob"
+	nodeCommit     = "source/commit"
+	nodeTree       = "source/tree"
+	nodeBlob       = "source/blob"
+	nodeRepository = "entity/repository"
+	nodeProject    = "entity/project"
 )
 
-// The structural edges beyond the automatic contributor edge.
+// The structural and semantic edges beyond the automatic contributor edge.
 const (
-	edgeTree  = "derivation/tree"  // commit -> its root tree
-	edgeEntry = "derivation/entry" // tree -> one entry (blob or subtree); fields: name, mode
+	edgeTree     = "derivation/tree"    // commit -> its root tree
+	edgeEntry    = "derivation/entry"   // tree -> one entry; fields: name, mode
+	edgeInput    = "derivation/input"   // entity -> its founding commit (D1)
+	edgeHostedIn = "relation/hosted_in" // project -> repository
 )
 
-// gitShaField is the lookup key every claim here carries — content_hash already
-// serves this for reuse (-> DESIGN.md), but git_sha is what a human, or `git log`,
-// cross-references against.
+// gitShaField is a claim's lookup key, alongside content_hash (-> DESIGN.md).
 const gitShaField = "git_sha"
 
-// made pairs a signed claim with the height a claim citing it must climb past
-// (§4.1: a citing claim declares height explicitly, one more than the tallest
-// thing it cites).
+// made pairs a signed claim with the height a citer must climb past (§4.1).
 type made struct {
 	claim  ranke.Claim
 	height uint64
 }
 
-// converter walks one commit's objects bottom-up, memoising by git sha so an
-// entry appearing twice (an unchanged subtree, a duplicated blob) becomes one
-// claim cited twice, not two claims.
+// converter walks one commit's objects bottom-up, memoising by git sha so a
+// repeated blob or an unchanged subtree becomes one claim, cited twice.
 type converter struct {
 	ctx         context.Context
 	git         gitRepo
@@ -53,15 +50,16 @@ type converter struct {
 	signer      crypto.Signer
 	at          time.Time
 	bySha       map[string]made
-	claims      []ranke.Claim // build order: every child before the parent that cites it
+	claims      []ranke.Claim // build order: every child before its citer
 }
 
-// gitToClaims converts one commit into claims: every blob and tree it reaches,
-// nested to match git's own structure, then the commit itself. Content at every
-// level is git's own raw object payload, stored in u so a later restore (or a
-// dedup lookup) can read it back — u is a plain in-process scratch store here,
-// not a ranke-db connection (that's phase 2).
-func gitToClaims(ctx context.Context, g gitRepo, commitSha string, u ranke.Universe, contributor ranke.Contributor, signer crypto.Signer) ([]ranke.Claim, error) {
+// gitToClaims converts one commit: every blob and tree it reaches, nested to
+// match git's structure, the commit itself, then the repository and project
+// entities it evidences — u is a local scratch store, not ranke-db (phase 2).
+func gitToClaims(
+	ctx context.Context, g gitRepo, commitSha string, u ranke.Universe,
+	contributor ranke.Contributor, signer crypto.Signer, repoURL, project string,
+) ([]ranke.Claim, error) {
 	c := &converter{
 		ctx: ctx, git: g, u: u, contributor: contributor, signer: signer,
 		at: time.Now().UTC(), bySha: map[string]made{},
@@ -90,13 +88,19 @@ func gitToClaims(ctx context.Context, g gitRepo, commitSha string, u ranke.Unive
 		return nil, fmt.Errorf("commit %s: %w", commitSha, err)
 	}
 	c.claims = append(c.claims, commit.claim)
+
+	repo, err := c.repository(repoURL, commit)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := c.project(project, commit, repo); err != nil {
+		return nil, err
+	}
 	return c.claims, nil
 }
 
-// tree converts one git tree object: its entries first (recursively), then the
-// tree claim itself, citing each entry by a derivation/entry edge carrying the
-// name and mode git's own tree encoding assigns it — structure available to
-// Ranke's graph independent of what the raw content holds.
+// tree converts one git tree: its entries first (recursively), then the tree
+// claim, citing each by a derivation/entry edge carrying its name and mode.
 func (c *converter) tree(sha string) (made, error) {
 	if m, ok := c.bySha[sha]; ok {
 		return m, nil
@@ -147,9 +151,8 @@ func (c *converter) tree(sha string) (made, error) {
 	return m, nil
 }
 
-// blob converts one git blob. Content is the file's bytes exactly, which is also
-// what makes an unchanged file share one content_hash no matter how many trees,
-// or how many commits, cite it.
+// blob converts one git blob. Content is the file's bytes exactly, so an
+// unchanged file shares one content_hash no matter how many trees cite it.
 func (c *converter) blob(sha string) (made, error) {
 	if m, ok := c.bySha[sha]; ok {
 		return m, nil
@@ -167,9 +170,8 @@ func (c *converter) blob(sha string) (made, error) {
 	return m, nil
 }
 
-// write builds and signs one claim: payload as external content (so identical
-// bytes anywhere in the walk share one content_hash), its git sha as a lookup
-// field, and edges already resolved. height is one past the tallest thing cited.
+// write builds one git-object claim: payload as external content, its git sha
+// as a lookup field, edges already resolved.
 func (c *converter) write(typ string, payload []byte, gitSha string, childHeight uint64, edges []ranke.Edge) (made, error) {
 	id, err := ranke.HashContent(payload)
 	if err != nil {
@@ -192,15 +194,91 @@ func (c *converter) write(typ string, payload []byte, gitSha string, childHeight
 	return made{claim: claim, height: childHeight + 1}, nil
 }
 
-// claimsToGit restores claims — in the dependency order gitToClaims returns them,
-// every child before the parent that cites it — into dest, replaying each one's
-// raw content through git's own object writer. Nothing here reads an edge: the
-// content alone is what git needs back (-> DESIGN.md, "content is git's job").
+// repository builds entity/repository, D1-anchored to the commit that first
+// evidenced it — its url is what a restore needs back to reconfigure origin.
+func (c *converter) repository(repoURL string, commit made) (made, error) {
+	input, err := ranke.NewEdge(ranke.EdgeConfig{
+		Reference: commit.claim.ID(), Referenced: commit.claim, Type: edgeInput,
+	})
+	if err != nil {
+		return made{}, fmt.Errorf("repository: input edge: %w", err)
+	}
+	m, err := c.writeEntity(nodeRepository, []byte(repoURL), map[string]string{"url": repoURL}, commit.height, []ranke.Edge{input})
+	if err != nil {
+		return made{}, fmt.Errorf("repository: %w", err)
+	}
+	c.claims = append(c.claims, m.claim)
+	return m, nil
+}
+
+// project builds entity/project: D1-anchored to the same commit, and pointing
+// at the repository via relation/hosted_in — a binary fact needs no reified
+// relation node (-> DESIGN.md).
+func (c *converter) project(name string, commit, repo made) (made, error) {
+	input, err := ranke.NewEdge(ranke.EdgeConfig{
+		Reference: commit.claim.ID(), Referenced: commit.claim, Type: edgeInput,
+	})
+	if err != nil {
+		return made{}, fmt.Errorf("project: input edge: %w", err)
+	}
+	hostedIn, err := ranke.NewEdge(ranke.EdgeConfig{
+		Reference: repo.claim.ID(), Referenced: repo.claim, Type: edgeHostedIn,
+		RelationDirection: ranke.RelationTo,
+	})
+	if err != nil {
+		return made{}, fmt.Errorf("project: hosted_in edge: %w", err)
+	}
+	height := commit.height
+	if repo.height > height {
+		height = repo.height
+	}
+	m, err := c.writeEntity(nodeProject, []byte(name), map[string]string{"name": name}, height, []ranke.Edge{input, hostedIn})
+	if err != nil {
+		return made{}, fmt.Errorf("project: %w", err)
+	}
+	c.claims = append(c.claims, m.claim)
+	return m, nil
+}
+
+// writeEntity builds one entity claim: small inline content, fields for a
+// later crif lookup (phase 2), edges already resolved.
+func (c *converter) writeEntity(typ string, content []byte, fields map[string]string, childHeight uint64, edges []ranke.Edge) (made, error) {
+	b := ranke.NewClaim(typ, c.contributor).
+		WithInlineContent(content).
+		WithEncoding(ranke.EncodingPlain).
+		WithCreatedAt(c.at).
+		WithHeight(childHeight + 1).
+		WithEdges(edges...)
+	for k, v := range fields {
+		b = b.WithField(k, v)
+	}
+	claim, err := b.Sign(c.signer)
+	if err != nil {
+		return made{}, err
+	}
+	return made{claim: claim, height: childHeight + 1}, nil
+}
+
+// claimsToGit restores claims into dest: git objects replayed through git's own
+// writer in the order gitToClaims returns them (every child before its citer),
+// then origin reconfigured from the repository entity's url — everything git
+// itself can hold, restored; a plain `git init` + objects would leave origin
+// unset (-> DESIGN.md, "content is git's job; edges are Ranke's job").
 func claimsToGit(ctx context.Context, dest gitRepo, u ranke.Universe, claims []ranke.Claim) (string, error) {
-	var commitSha string
+	var commitSha, repoURL string
 	for _, claim := range claims {
+		typ := claim.Node().Type()
+		if typ == nodeRepository {
+			if url, err := claim.Node().GetField("url"); err == nil {
+				repoURL = url
+			}
+			continue
+		}
+		if typ == nodeProject {
+			continue
+		}
 		var kind string
-		switch claim.Node().Type() {
+		switch typ {
 		case nodeBlob:
 			kind = "blob"
 		case nodeTree:
@@ -208,7 +286,7 @@ func claimsToGit(ctx context.Context, dest gitRepo, u ranke.Universe, claims []r
 		case nodeCommit:
 			kind = "commit"
 		default:
-			return "", fmt.Errorf("restore: claim %s has unexpected type %q", claim.ID(), claim.Node().Type())
+			return "", fmt.Errorf("restore: claim %s has unexpected type %q", claim.ID(), typ)
 		}
 		r, err := claim.GetContent(ctx, u)
 		if err != nil {
@@ -228,6 +306,11 @@ func claimsToGit(ctx context.Context, dest gitRepo, u ranke.Universe, claims []r
 	}
 	if commitSha == "" {
 		return "", fmt.Errorf("restore: no commit claim in the set")
+	}
+	if repoURL != "" {
+		if _, err := dest.run("remote", "add", "origin", repoURL); err != nil {
+			return "", fmt.Errorf("restore: configure origin: %w", err)
+		}
 	}
 	return commitSha, nil
 }
