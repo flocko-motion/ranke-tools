@@ -21,7 +21,9 @@ BROKKR_INSTALL_SH := https://raw.githubusercontent.com/flocko-motion/sindri/mast
 # gitbackup, rather than hand-writing a second build recipe for it.
 TOOLS := gitbackup
 
-.PHONY: all help build test vet fmt lint check tidy docs docs-clean
+RANKE_DB_REPO ?= flocko-motion/ranke-db
+
+.PHONY: all help build test vet fmt lint check tidy docs docs-clean upgrade
 
 .DEFAULT_GOAL := all
 
@@ -89,3 +91,17 @@ docs: ## Pull the latest ranke-graph documents (papers, spec, glossary) into doc
 
 docs-clean: ## Remove the pulled paper references
 	rm -rf $(PAPERS_DIR)
+
+upgrade: ## Bump server/.rankedb-version to ranke-db's latest release and install it (analog to ranke-db's own `make upgrade`)
+	@command -v curl >/dev/null 2>&1 || { echo "ERROR: curl not found"; exit 1; }
+	@latest=$$(curl -fsSL https://api.github.com/repos/$(RANKE_DB_REPO)/releases/latest \
+		| grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4); \
+	[ -n "$$latest" ] || { echo "ERROR: couldn't resolve $(RANKE_DB_REPO)'s latest release"; exit 1; }; \
+	current=$$(cat server/.rankedb-version 2>/dev/null || echo "none"); \
+	if [ "$$current" = "$$latest" ]; then \
+		echo ">> server/.rankedb-version already at $$latest"; \
+	else \
+		echo ">> server/.rankedb-version: $$current -> $$latest"; \
+		echo "$$latest" > server/.rankedb-version; \
+	fi
+	@./server/install.sh

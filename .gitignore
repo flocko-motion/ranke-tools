@@ -1,5 +1,8 @@
 /bin/
 docs/papers/
+/server/rankedb
+/server/.rankedb-installed
+/server/.rankedb.pid
 *.test
 *.out
 .DS_Store

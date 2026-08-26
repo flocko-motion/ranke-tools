@@ -1,0 +1,49 @@
+{
+  "signer": {
+    "type": "inmemory",
+    "key": "env(RANKE_SIGNER_KEY)"
+  },
+  "storage": {
+    "type": "stack",
+    "layers": [
+      {
+        "type": "mem"
+      }
+    ]
+  },
+  "sequencer": {
+    "type": "dev",
+    "history": {
+      "type": "mem"
+    }
+  },
+  "accounts": {
+    "ops": {
+      "grants": [
+        "CR *",
+        "C $branches",
+        "R $branches",
+        "R $archive",
+        "R $universe"
+      ]
+    }
+  },
+  "endpoints": [
+    {
+      "transport": {
+        "type": "rest",
+        "addr": ":8080",
+        "allowedOrigins": "http://localhost:5173, http://127.0.0.1:5173, http://localhost:4173"
+      },
+      "auth": [
+        {
+          "type": "noauth",
+          "subject": "ops"
+        }
+      ],
+      "admit": [
+        "ops"
+      ]
+    }
+  ]
+}
