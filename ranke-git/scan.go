@@ -1,8 +1,8 @@
 // package: main / ranke-git
 // type:    logic + entrypoint
 // job:     `ranke-git scan` — records a vulnerability scan's findings against an already-
-// archived commit: crif entity/cve per finding, one derivation/vulnerability_scan claim
-// citing the commit (derivation/input) and each finding (relation/cve)
+// archived commit: find or build entity/cve per finding, one derivation/vulnerability_scan
+// claim citing the commit (derivation/input) and each finding (relation/cve)
 // limits:  never parses scanner output itself — the caller names which CVEs were found
 // (-> DESIGN.md, same principle as attach)
 package main
@@ -75,7 +75,7 @@ func parseCVE(raw string) cveFinding {
 	return cveFinding{id: id, url: url}
 }
 
-// runScan finds the target commit, crifs each finding's entity/cve, then
+// runScan finds the target commit, finds or builds each finding's entity/cve, then
 // contributes one derivation/vulnerability_scan claim citing all of it.
 func runScan(cmd *cobra.Command, o *options, commitSha string, cves []string, content []byte) error {
 	ctx := cmd.Context()
@@ -102,7 +102,7 @@ func runScan(cmd *cobra.Command, o *options, commitSha string, cves []string, co
 	var claims []ranke.Claim
 	for _, raw := range cves {
 		f := parseCVE(raw)
-		cve, mint, err := findOrBuildCVE(ctx, s.client, o.branch, s.contributor, s.signer, target, f)
+		cve, mint, err := findOrBuildCVE(ctx, s.client, o.branch, s.contributor, s.signer, target, f, time.Time{})
 		if err != nil {
 			return err
 		}
@@ -121,7 +121,7 @@ func runScan(cmd *cobra.Command, o *options, commitSha string, cves []string, co
 		}
 	}
 
-	scan, err := buildScan(ctx, u, s.contributor, s.signer, content, height, edges)
+	scan, err := buildScan(ctx, u, s.contributor, s.signer, content, height, edges, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -129,13 +129,17 @@ func runScan(cmd *cobra.Command, o *options, commitSha string, cves []string, co
 	return contributeAndReport(ctx, s.client, u, o.branch, claims, cmd.OutOrStdout())
 }
 
-// findOrBuildCVE crifs one entity/cve: reuse the query hit if there is one,
+// findOrBuildCVE finds or builds one entity/cve: reuse the query hit if there is one,
 // otherwise mint it fresh, D1-anchored to target — the same shape
 // repository()/project() use (convert.go), invoked here instead of the walk.
+// A zero at defaults to now.
 func findOrBuildCVE(
 	ctx context.Context, c *client, branch string, contributor ranke.Contributor, signer crypto.Signer,
-	target *reused, f cveFinding,
+	target *reused, f cveFinding, at time.Time,
 ) (reused, ranke.Claim, error) {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	found, err := findOne(ctx, c, branch, nodeCVE, cveIDField, f.id)
 	if err != nil {
 		return reused{}, nil, fmt.Errorf("scan: cve %s: %w", f.id, err)
@@ -150,7 +154,7 @@ func findOrBuildCVE(
 	b := ranke.NewClaim(nodeCVE, contributor).
 		WithInlineContent([]byte(f.id)).
 		WithEncoding(ranke.EncodingPlain).
-		WithCreatedAt(time.Now().UTC()).
+		WithCreatedAt(at).
 		WithHeight(target.height+1).
 		WithField(cveIDField, f.id).
 		WithEdges(input)
@@ -167,12 +171,16 @@ func findOrBuildCVE(
 // buildScan signs the derivation/vulnerability_scan claim: external content
 // when the caller gave scanner output, none at all otherwise — V-CONTENT
 // allows a claim with no content, and this one stays structural without it.
+// A zero at defaults to now.
 func buildScan(
 	ctx context.Context, u ranke.Universe, contributor ranke.Contributor, signer crypto.Signer,
-	content []byte, targetHeight uint64, edges []ranke.Edge,
+	content []byte, targetHeight uint64, edges []ranke.Edge, at time.Time,
 ) (ranke.Claim, error) {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	b := ranke.NewClaim(nodeScan, contributor).
-		WithCreatedAt(time.Now().UTC()).
+		WithCreatedAt(at).
 		WithHeight(targetHeight + 1).
 		WithEdges(edges...)
 	if len(content) > 0 {

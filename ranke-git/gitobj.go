@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -16,8 +17,18 @@ type gitRepo struct{ dir string }
 
 // run executes one git subcommand in the repo's directory.
 func (g gitRepo) run(args ...string) ([]byte, error) {
+	return g.runEnv(nil, args...)
+}
+
+// runEnv is run, with extra environment variables layered onto the current
+// process's own — e.g. GIT_AUTHOR_DATE/GIT_COMMITTER_DATE to backdate a demo
+// commit, without a global os.Setenv that could leak into an unrelated call.
+func (g gitRepo) runEnv(env []string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.dir
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut

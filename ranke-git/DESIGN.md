@@ -21,30 +21,42 @@ one commit, follows none, and may narrow to a path subset besides.
 ## Claim shape
 
 All of it stays in the `source` class — capture, not interpretation, all the way
-down. Nothing here is a `derivation`.
+down. Nothing here is a `derivation`. Every type is namespaced `git_` —
+`commit`, `tree`, `blob`, `tag`, `ref` are common enough words that a bare one
+invites collision with another tool's own vocabulary in the same archive-wide,
+open `V-TYPE` namespace (`gitPrefix`, convert.go — shared with `attach`'s
+own subtype prefix).
 
-- **`source/commit`** — one claim per git commit. Content is git's own raw commit
-  object bytes, verbatim, stored external (`content_hash`). Fields carry the git
-  commit sha for lookup (`git_sha`) and, in snapshot mode, the parent's git sha as
-  a plain field even when no parent claim exists to cite (an honest record of what
-  wasn't captured, not a broken reference).
-- **`source/tree`** — one claim per git tree object (one per directory level,
-  nested — never flattened). Content is git's raw tree object bytes, external.
-  Cites each entry (blob or subtree) via an edge carrying `fields: {name, mode}` —
-  the structural information a tree object encodes, available as edge fields
-  independent of what the raw content holds.
-- **`source/blob`** — one claim per git blob. Content is the file's bytes exactly —
-  already byte-identical to a git blob's payload — external, so identical files
-  anywhere in the walk share one `content_hash` regardless of path or commit.
-- **`source/tag`** — one claim per *annotated* tag object (git's fourth object
-  kind), carried exactly like commit/tree/blob: raw bytes, external, byte-exact.
-  A *lightweight* tag has no such object — it's just a name pointing at a commit,
-  so it never gets one of these.
-- **`source/ref`** — one claim per branch or tag name, as it resolved at backup
-  time. Small inline content (the name itself), `fields: {name, kind}`, and one
-  `derivation/points_at` edge to what it names — the commit directly for a branch
-  or a lightweight tag, the `source/tag` claim for an annotated one. This is what
-  lets a restore recreate the same branches and tags, not just the same objects.
+- **`source/git_commit`** — one claim per git commit. Content is git's own
+  raw commit object bytes, verbatim, stored external (`content_hash`). Fields
+  carry the git commit sha for lookup (`git_sha`) and, in snapshot mode, the
+  parent's git sha as a plain field even when no parent claim exists to cite (an
+  honest record of what wasn't captured, not a broken reference).
+- **`source/git_tree`** — one claim per git tree object (one per directory
+  level, nested — never flattened). Content is git's raw tree object bytes,
+  external. Cites each entry (blob or subtree) via an edge carrying
+  `fields: {name, mode, path}` — the structural information a tree object
+  encodes, plus the entry's full path from the commit root (`name` alone is
+  just the local one), available as edge fields independent of what the raw
+  content holds.
+- **`source/git_blob`** — one claim per git blob. Content is the file's
+  bytes exactly — already byte-identical to a git blob's payload — external, so
+  identical files anywhere in the walk share one `content_hash` regardless of
+  path or commit. Also carries a `path` field, for readability browsing the
+  claim itself — but it only ever reflects where THIS claim was first minted; a
+  blob shared across paths or commits keeps citing the same claim, so its
+  authoritative, per-occurrence path is the tree entry edge's own `path` field,
+  not this one.
+- **`source/git_tag`** — one claim per *annotated* tag object (git's fourth
+  object kind), carried exactly like commit/tree/blob: raw bytes, external,
+  byte-exact. A *lightweight* tag has no such object — it's just a name pointing
+  at a commit, so it never gets one of these.
+- **`source/git_ref`** — one claim per branch or tag name, as it resolved
+  at backup time. Small inline content (the name itself), `fields: {name, kind}`,
+  and one `derivation/points_at` edge to what it names — the commit directly for
+  a branch or a lightweight tag, the `source/git_tag` claim for an
+  annotated one. This is what lets a restore recreate the same branches and
+  tags, not just the same objects.
 
 Storing git's raw object bytes (rather than decomposing and re-deriving git's
 encoding at restore time) is what makes byte-exact restore trivial and testable:
@@ -59,17 +71,17 @@ Edge classes are closed to `derivation`, `relation`, and `contribution` (`V-TYPE
 source via a `derivation`- or `relation`-class edge is normal (see: an ingestion
 worker citing the dump an `.eml` was split from). This design uses:
 
-- `source/commit` → its root `source/tree`: a `derivation`-class edge.
-- `source/tree` → each entry: a `derivation`-class edge, `fields: {name, mode}`.
-- `source/commit` → its git parent commit(s): a `derivation`-class edge. **Backup
+- `source/git_commit` → its root `source/git_tree`: a `derivation`-class edge.
+- `source/git_tree` → each entry: a `derivation`-class edge, `fields: {name, mode}`.
+- `source/git_commit` → its git parent commit(s): a `derivation`-class edge. **Backup
   only** — this is the edge that reconstructs the repo's real commit graph inside
   the archive. Snapshot mode never follows it; the parent sha still rides as a
   plain field (see above).
-- `source/ref` → what it names: a `derivation/points_at` edge, to a commit
-  directly or, for an annotated tag, to its `source/tag` claim.
-- `source/commit`/`source/tag` → `entity/repository`/`entity/project`: intended
+- `source/git_ref` → what it names: a `derivation/points_at` edge, to a commit
+  directly or, for an annotated tag, to its `source/git_tag` claim.
+- `source/git_commit`/`source/git_tag` → `entity/repository`/`entity/project`: intended
   to be a `relation/*`-class edge (e.g. `relation/snapshot_of`), present on
-  **every** run once phase 2's crif exists — a claim can't grow new edges after
+  **every** run once phase 2's find-or-build exists — a claim can't grow new edges after
   signing, so this is how a later run would re-establish "this documents that
   entity" against one only created once. **Not built yet** — see Entities below.
 
@@ -79,9 +91,9 @@ worker citing the dump an `.eml` was split from). This design uses:
 repo", "this project" — as opposed to the concrete captured material. Each needs a
 path back to a source (`D1`), satisfied once, at creation:
 
-- `crif` (`prepare.go`'s `findOne`): query first, by a stable field (`url` for the
-  repo, `name` for the project); reuse the id and height if found, mint fresh —
-  `derivation/input`-anchored to that run's primary commit — if not. Two
+- Find or build (`prepare.go`'s `findOne`): query first, by a stable field (`url`
+  for the repo, `name` for the project); reuse the id and height if found, mint
+  fresh — `derivation/input`-anchored to that run's primary commit — if not. Two
   independent runs won't converge on the same entity id by content-addressing
   alone (`created_at` differs), so this stays an explicit lookup rather than
   something automatic. Built and verified live: a second run against the same
@@ -109,11 +121,9 @@ log or a Windows-vs-Linux artifact pair — `source`, all of it, unconditionally
 
 Two axes, both settable, kept independent:
 
-- `--type` sets the subtype, always assembled as `source/rankegit_<type>` —
-  never a bare `--type` string, and never a class other than `source`. The
-  `rankegit_` prefix exists because the subtype vocabulary is open
-  archive-wide (`V-TYPE`): a bare word like "log" or "advisory" is exactly what
-  another tool might mean something else by, and the list of kinds here (logs,
+- `--type` sets the subtype, always assembled as `source/git_<type>` (the
+  same `gitPrefix` every claim type here uses) — never a bare `--type`
+  string, and never a class other than `source`. The list of kinds here (logs,
   test results, scan output, per-platform artifacts...) is open-ended by
   design, so there's no fixed enum to validate against instead. `subtypeChars`
   enforces the ADT's own character rule (`checkSubtype`, shared with
@@ -124,8 +134,8 @@ Two axes, both settable, kept independent:
   something else tomorrow.
 
 `--name` is the human title either way — a log's caption or an artifact's
-filename, the same field `entity/project` and `source/ref` already use for the
-same purpose.
+filename, the same field `entity/project` and `source/git_ref` already
+use for the same purpose.
 
 The claim cites its target via `relation/attached_to` (`RelationTo`) — a
 relation, not a `derivation/input`: the attachment isn't an interpretation of
@@ -134,8 +144,9 @@ the same shape as the release generator's `relation/mentions`. Content is
 always external, same as every other git-object claim, so two identical
 attachments (a log rerun byte-for-byte) share one `content_hash`. No git repo
 is touched — `attach` finds its target purely by querying the branch for the
-`source/commit` claim with a matching `git_sha` (`findOne`, the same helper
-crif uses), then contributes one claim. `--file` or stdin supplies the bytes.
+`source/git_commit` claim with a matching `git_sha` (`findOne`, the same
+helper find-or-build uses), then contributes one claim. `--file` or stdin
+supplies the bytes.
 
 ## Vulnerability scans
 
@@ -147,10 +158,10 @@ is for here — a convention for this tool's own claims, not a general rule (the
 boundary itself isn't formally decidable; the foundation paper leaves it to the
 application).
 
-- `entity/cve` — `crif`'d exactly like `entity/repository`/`entity/project`
+- `entity/cve` — found or built exactly like `entity/repository`/`entity/project`
   (`findOrBuildCVE` reuses `findOne`), fields `{cve_id, url (optional)}`, no content,
   D1-anchored via `derivation/input` to the commit on first mint. Unprefixed, unlike
-  `attach`'s `rankegit_` types — "CVE" is an external, standardized identifier
+  `attach`'s `git_` types — "CVE" is an external, standardized identifier
   namespace already, not an open word another tool might mean something else by.
 - The scan claim cites the commit via `derivation/input` (an interpretation of its
   source, unlike `attach`'s `relation/attached_to`) and each finding via one
@@ -162,14 +173,57 @@ application).
   permits a claim with neither inline nor external content, confirmed against both
   the spec and `ranke-go`'s `ClaimBuilder.Sign()` before relying on it, and live
   against a running instance (`buildScan`'s contentless path signs and contributes).
-  Re-scanning the same commit for the same CVEs mints no new `entity/cve` (crif
-  reuse) but always a fresh scan claim — each run is its own event, not expected to
+  Re-scanning the same commit for the same CVEs mints no new `entity/cve` (found,
+  not rebuilt) but always a fresh scan claim — each run is its own event, not expected to
   dedupe the way an unchanged file does (same reasoning as attach's own content-hash
   question below).
 
 Built and verified live: `entity/cve` reused across separate `scan` runs and across
 different findings sharing one CVE, and a contentless scan claim round-trips through
 a real contribute.
+
+## `demo server`'s timeline and identities
+
+`ranke-git demo server` (demo_server.go) exists to show what the tool actually does
+against a live instance, so it stays honest to how a real release looks, not a
+convenience shortcut:
+
+- Every claim across one run used to date within the same instant (the whole run
+  completes in well under a second) — a flat, unrealistic-looking timeline. Now each
+  phase (archive, attach, scan) gets its own timestamp, hours apart, counted forward
+  from real now; the two git commits get their own real `GIT_AUTHOR_DATE`/
+  `GIT_COMMITTER_DATE`, hours apart too (`demoServerTimeline`, `demoCommit`'s `at`).
+  Forward only, never backdated — the dev sequencer's own clock (`/dev/clock`) never
+  moves backward (mirrors `cmd/generator`'s ambient-clock pattern in `ranke-db`), so a
+  synthetic story has to count up from wherever real now already is.
+- This is also what `contributeAndReport`'s `maxCreatedAt` fix is for: it used to
+  advance the dev clock by a fixed "+1 minute from real now," which only worked
+  because every claim was, in fact, built moments before contributing. Once a claim
+  can carry a timestamp hours away from real now, the clock has to track the batch's
+  own latest `created_at` exactly, not a fixed offset — a real fix for every command,
+  not just the demo.
+- Two contributors sign it, not one: a CI-pipeline identity attests the archive and
+  its build log, a separate scanner identity attests the scan and its CVEs. A claim's
+  signature is who attested it, not access control, so one actor signing everything
+  would misrepresent the story the graph tells.
+
+## Provisioning a real identity
+
+`ranke-git identity register` mints an ed25519 keypair, contributes its root claim,
+and writes the key to disk — the one-time bootstrap a real, persistent identity
+needs (a CI pipeline's own, say), as opposed to `demo server`'s throwaway
+self-registering one. It refuses to overwrite an existing `--out`, so a re-run never
+silently replaces a key something else already depends on. Storing the written key
+safely (a CI secret store, a vault) is the caller's job — this command's job ends at
+"a real identity now exists and here is its key." Verified live: the printed
+`--contributor-id`/`--signing-key` pair works unmodified as input to a real
+`snapshot` call.
+
+The intended shape this unlocks: a CI step that runs `ranke-git snapshot` on every
+push, using a provisioned identity — the archive grows forward from whenever it's
+switched on, one real commit at a time, dated today (no historical backfill, so no
+`V-MONO` risk from non-monotonic git history). Not yet built: the actual CI
+workflow wiring, and a real, persistently-deployed `ranke-db` to point it at.
 
 ## Sending content
 
@@ -194,13 +248,14 @@ tested (`TestRoundTripDedupesRepeatedBlobs`, `TestBackupRoundTripIsByteExact`).
 
 ## Dedup across separate runs
 
-`content_hash` is the reuse key at every level — `source/commit` and `source/tree`
-get one from their external raw-bytes content the same way `source/blob` always
-has, and unlike a claim's own id, `content_hash` is time-independent (no
-`created_at` in it), so it's stable across separate runs, unlike `bySha`'s
-in-memory map above which starts empty every run.
+`content_hash` is the reuse key at every level — `source/git_commit` and
+`source/git_tree` get one from their external raw-bytes content the same
+way `source/git_blob` always has, and unlike a claim's own id,
+`content_hash` is time-independent (no `created_at` in it), so it's stable
+across separate runs, unlike `bySha`'s in-memory map above which starts empty
+every run.
 
-`prepare.go`'s `scanContentHashes` queries every `source/commit`/`tree`/`blob`/`tag`
+`prepare.go`'s `scanContentHashes` queries every `source/git_commit`/`tree`/`blob`/`tag`
 claim **on the destination branch**, keyed by `content_hash`, before the build
 phase mints anything — a flat type filter, not a graph walk from the repo entity
 as first sketched: simpler, and equivalent in effect as long as one branch holds
@@ -221,7 +276,7 @@ it, and the new commit — three claims, not the whole tree again.
   path in today; a bare `--repo` with no `--clone` refuses rather than cloning.
 - Enumerating "every branch/tag" for `backup` — today's `--git-branch`/`--git-tag`
   are named explicitly, not discovered from the repo.
-- `relation/snapshot_of` (see Edges above): once crif finds an existing entity,
+- `relation/snapshot_of` (see Edges above): once find-or-build finds an existing entity,
   nothing yet records that *this* run's commit also relates to it — only the
   founding commit's `derivation/input` edge does. Worth adding once something
   needs to walk "every snapshot of this repo," not just "the first one."

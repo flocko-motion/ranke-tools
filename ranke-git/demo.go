@@ -1,9 +1,8 @@
 // package: main / ranke-git
 // type:    entrypoint
-// job:     `ranke-git demo` — a small multi-commit, multi-branch, tagged repo, backed up
-// and restored, both kept on disk to look at — illustrative only, not one of the tool's
-// two real actions
-// limits:  no ranke-db, same as the rest of phase one (-> convert_test.go for real coverage)
+// job:     `ranke-git demo local` — a small multi-branch, tagged repo, backed up and
+// restored, both kept on disk — illustrative, not one of the tool's real actions
+// limits:  no ranke-db (-> demo_server.go's `demo server`, convert_test.go for real coverage)
 package main
 
 import (
@@ -14,15 +13,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/flocko-motion/ranke-go"
 )
 
-func demoCmd() *cobra.Command {
-	return &cobra.Command{
+// demoCmd is the shared parent for demo's two shapes: local (no server) and
+// server (against a live ranke-db, demo_server.go).
+func demoCmd(o *options) *cobra.Command {
+	parent := &cobra.Command{
 		Use:   "demo",
+		Short: "Run a demo — local (no server) or server (against a live ranke-db)",
+	}
+	parent.AddCommand(demoLocalCmd(), demoServerCmd(o))
+	return parent
+}
+
+func demoLocalCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "local",
 		Short: "Back up a small multi-branch, tagged repo, and restore it — keeps both so you can look",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDemo(cmd.OutOrStdout())
@@ -53,7 +64,7 @@ func runDemo(out io.Writer) error {
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
 	claims, err := backupToClaims(ctx, g, refs, u, contributor, signer,
-		"https://example.com/demo/ranke-git.git", "ranke-git-demo", prep{})
+		"https://example.com/demo/ranke-git.git", "ranke-git-demo", prep{}, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -114,12 +125,12 @@ func demoBuildRepo(dir string) (gitRepo, []refSpec, error) {
 	if err := demoCommit(g, []demoFile{
 		{"README.md", "ranke-git demo\n", 0o644},
 		{"bin/run.sh", "#!/bin/sh\necho hi\n", 0o755},
-	}, "first commit"); err != nil {
+	}, "first commit", time.Time{}); err != nil {
 		return gitRepo{}, nil, err
 	}
 	if err := demoCommit(g, []demoFile{
 		{"pkg/sub/a.go", "package sub\n", 0o644},
-	}, "second commit"); err != nil {
+	}, "second commit", time.Time{}); err != nil {
 		return gitRepo{}, nil, err
 	}
 
@@ -131,7 +142,7 @@ func demoBuildRepo(dir string) (gitRepo, []refSpec, error) {
 	}
 	if err := demoCommit(g, []demoFile{
 		{"feature.txt", "work in progress\n", 0o644},
-	}, "feature commit"); err != nil {
+	}, "feature commit", time.Time{}); err != nil {
 		return gitRepo{}, nil, err
 	}
 	if _, err := g.run("checkout", "-q", "main"); err != nil {
@@ -161,7 +172,10 @@ type demoFile struct {
 }
 
 // demoCommit writes files (on top of whatever's already there) and commits.
-func demoCommit(g gitRepo, files []demoFile, message string) error {
+// A zero at commits at real now, like git always does; a real value backdates
+// the commit's own author/committer date (GIT_AUTHOR_DATE/GIT_COMMITTER_DATE)
+// — demo server's own story spans real calendar days, not one instant.
+func demoCommit(g gitRepo, files []demoFile, message string, at time.Time) error {
 	for _, f := range files {
 		path := filepath.Join(g.dir, f.rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -174,7 +188,12 @@ func demoCommit(g gitRepo, files []demoFile, message string) error {
 	if _, err := g.run("add", "-A"); err != nil {
 		return err
 	}
-	_, err := g.run("commit", "-q", "-m", message)
+	if at.IsZero() {
+		_, err := g.run("commit", "-q", "-m", message)
+		return err
+	}
+	stamp := at.Format(time.RFC3339)
+	_, err := g.runEnv([]string{"GIT_AUTHOR_DATE=" + stamp, "GIT_COMMITTER_DATE=" + stamp}, "commit", "-q", "-m", message)
 	return err
 }
 

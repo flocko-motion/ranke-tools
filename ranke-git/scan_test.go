@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/flocko-motion/ranke-go"
 )
@@ -49,7 +50,7 @@ func TestBuildScanShape(t *testing.T) {
 		t.Fatalf("cve edge: %v", err)
 	}
 
-	claim, err := buildScan(ctx, u, contributor, signer, []byte("scanner output"), 3, []ranke.Edge{input, cveEdge})
+	claim, err := buildScan(ctx, u, contributor, signer, []byte("scanner output"), 3, []ranke.Edge{input, cveEdge}, time.Time{})
 	if err != nil {
 		t.Fatalf("buildScan: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestBuildScanContentless(t *testing.T) {
 	ctx := context.Background()
 	u := ranke.NewMemoryUniverse()
 
-	claim, err := buildScan(ctx, u, contributor, signer, nil, 3, nil)
+	claim, err := buildScan(ctx, u, contributor, signer, nil, 3, nil, time.Time{})
 	if err != nil {
 		t.Fatalf("buildScan: %v", err)
 	}

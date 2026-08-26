@@ -1,6 +1,6 @@
 // package: main / ranke-git
 // type:    logic
-// job:     wires one action together: connect, prepare (crif + content_hash scan) where
+// job:     wires one action together: connect, prepare (find-or-build + content_hash scan) where
 // an action needs it, build claims, contribute only what's new
 // limits:  orchestration only; the pieces it calls own their own concerns
 package main
@@ -43,9 +43,8 @@ func loadSigningKey(path string) (ed25519.PrivateKey, error) {
 	return priv, nil
 }
 
-// loadContributor fetches the contributor claim id already names and binds
-// key to it, so claims built this run are attributed and signed as it. The
-// id is config, not discovered here (-> DESIGN.md, crif is for entities).
+// loadContributor fetches and binds the contributor claim id names — a
+// config value, not discovered here (-> DESIGN.md, find-or-build is for entities).
 func loadContributor(ctx context.Context, c *client, branch, id string, key ed25519.PrivateKey) (ranke.Contributor, error) {
 	claim, err := c.getClaim(ctx, branch, id)
 	if err != nil {
@@ -90,11 +89,27 @@ func connect(ctx context.Context, o *options) (*session, error) {
 	return &session{client: c, contributor: contributor, signer: key}, nil
 }
 
+// maxCreatedAt is the latest created_at among claims — what the dev
+// sequencer's clock must reach before this batch can land, exactly, not a
+// fixed offset from whenever the run happens to execute.
+func maxCreatedAt(claims []ranke.Claim) time.Time {
+	var at time.Time
+	for _, c := range claims {
+		if t := c.Node().CreatedAt(); t.After(at) {
+			at = t
+		}
+	}
+	return at
+}
+
 // contributeAndReport advances the dev clock, merges claims, and prints what
-// landed — the last step every action shares. u is where an externally-
-// content claim's bytes are read back from before they go out on the wire.
+// landed. u is where an externally-content claim's bytes come from.
 func contributeAndReport(ctx context.Context, c *client, u ranke.Universe, branch string, claims []ranke.Claim, out io.Writer) error {
-	if err := c.advanceClock(ctx, time.Now().UTC().Add(time.Minute)); err != nil {
+	at := maxCreatedAt(claims)
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	if err := c.advanceClock(ctx, at); err != nil {
 		return err
 	}
 	res, err := c.contribute(ctx, u, branch, claims)
@@ -109,10 +124,8 @@ func contributeAndReport(ctx context.Context, c *client, u ranke.Universe, branc
 // signer, and prep are ready.
 type shapeFunc func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep, u ranke.Universe) ([]ranke.Claim, error)
 
-// run connects, prepares (crif + content_hash scan), asks shape to build
-// claims, then contributes only what's new — the three phases the whole
-// tool is built around (-> DESIGN.md). For snapshot/backup specifically;
-// attach has no repository/project and does its own, simpler thing.
+// run connects, prepares, builds via shape, contributes only what's new —
+// snapshot/backup's shared shape (-> DESIGN.md); attach does its own.
 func run(cmd *cobra.Command, o *options, shape shapeFunc) error {
 	ctx := cmd.Context()
 	if o.repoURL == "" || o.project == "" {
@@ -124,7 +137,7 @@ func run(cmd *cobra.Command, o *options, shape shapeFunc) error {
 	}
 
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, ">> preparing — crif %s/%s, scanning existing content on %q\n", o.repoURL, o.project, o.branch)
+	fmt.Fprintf(out, ">> preparing — find or build %s/%s, scanning existing content on %q\n", o.repoURL, o.project, o.branch)
 	p, err := prepare(ctx, s.client, o.branch, o.repoURL, o.project)
 	if err != nil {
 		return err

@@ -10,6 +10,7 @@ import (
 	"crypto"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -114,7 +115,7 @@ func rootCmd() *cobra.Command {
 	f.StringVar(&o.project, "project", "", "the project name — its own entity, distinct from the repo (required)")
 	f.StringVar(&o.branch, "branch", "main", "the ranke-db branch this run contributes onto")
 	f.StringSliceVar(&o.paths, "path", nil, "restrict to this path within the repo (repeatable; monorepo subset)")
-	root.AddCommand(snapshotCmd(&o), backupCmd(&o), attachCmd(&o), scanCmd(&o), demoCmd(), demoServerCmd(&o))
+	root.AddCommand(snapshotCmd(&o), backupCmd(&o), attachCmd(&o), scanCmd(&o), demoCmd(&o))
 	return root
 }
 
@@ -134,7 +135,7 @@ func snapshotCmd(o *options) *cobra.Command {
 				return err
 			}
 			return run(cmd, o, func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep, u ranke.Universe) ([]ranke.Claim, error) {
-				return gitToClaims(ctx, g, ref, o.paths, u, contributor, signer, o.repoURL, o.project, p)
+				return gitToClaims(ctx, g, ref, o.paths, u, contributor, signer, o.repoURL, o.project, p, time.Time{})
 			})
 		},
 	}
@@ -166,7 +167,7 @@ func backupCmd(o *options) *cobra.Command {
 				refs = append(refs, refSpec{kind: "tag", name: t})
 			}
 			return run(cmd, o, func(ctx context.Context, contributor ranke.Contributor, signer crypto.Signer, p prep, u ranke.Universe) ([]ranke.Claim, error) {
-				return backupToClaims(ctx, g, refs, u, contributor, signer, o.repoURL, o.project, p)
+				return backupToClaims(ctx, g, refs, u, contributor, signer, o.repoURL, o.project, p, time.Time{})
 			})
 		},
 	}

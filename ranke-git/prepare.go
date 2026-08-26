@@ -1,6 +1,6 @@
 // package: main / ranke-git
 // type:    logic
-// job:     the preparational phase — crif the repository/project entities and scan
+// job:     the preparational phase — find or build the repository/project entities and scan
 // existing content_hash values, before the build phase mints anything new
 // limits:  server-facing only; the reuse it discovers is applied by convert.go's converter
 package main
@@ -12,7 +12,7 @@ import (
 	"github.com/flocko-motion/ranke-go"
 )
 
-// prepare crifs the repository and project entities and scans every git
+// prepare finds or builds the repository and project entities and scans every git
 // object claim already on branch for content_hash reuse — query first, so
 // the build phase mints only what's actually new (-> DESIGN.md).
 func prepare(ctx context.Context, c *client, branch, repoURL, project string) (prep, error) {
@@ -39,7 +39,7 @@ func prepare(ctx context.Context, c *client, branch, repoURL, project string) (p
 }
 
 // findOne looks up the single claim of typ on branch whose field equals
-// value — crif's read half. More than one match is a data problem this tool
+// value — find-or-build's lookup half. More than one match is a data problem this tool
 // did not cause, so it refuses rather than guessing which one to reuse.
 func findOne(ctx context.Context, c *client, branch, typ, field, value string) (*reused, error) {
 	recs, err := c.query(ctx, ranke.Query{

@@ -1,7 +1,7 @@
 // package: main / ranke-git
 // type:    test
 // job:     exercises demo-server against the real pinned ranke-db (server/run.sh, on its
-// own PORT), not a fake — proving real crif/content_hash reuse over the wire
+// own PORT), not a fake — proving real find-or-build/content_hash reuse over the wire
 // limits:  skips when run.sh/its binary aren't reachable at all
 package main
 

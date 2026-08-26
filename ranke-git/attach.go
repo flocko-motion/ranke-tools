@@ -20,11 +20,7 @@ import (
 	"github.com/flocko-motion/ranke-go"
 )
 
-// attachTypePrefix namespaces every subtype attach mints — the open subtype
-// vocabulary is shared archive-wide, and a bare word like "log" is exactly
-// what another tool might also mean something else by. No hyphen: subtype
-// chars are [a-z0-9_] only, so "ranke-git" becomes "rankegit" here.
-const attachTypePrefix = "rankegit_"
+// attach reuses gitPrefix (convert.go).
 
 // edgeAttachedTo is attachment -> the commit it documents: a relation, since
 // an attachment isn't an interpretation of the commit's content, it's
@@ -55,11 +51,11 @@ func attachCmd(o *options) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runAttach(cmd, o, commitSha, "source/"+attachTypePrefix+kind, name, contentType, content)
+			return runAttach(cmd, o, commitSha, "source/"+gitPrefix+kind, name, contentType, content)
 		},
 	}
 	c.Flags().StringVar(&commitSha, "commit", "", "the git sha of an already-archived commit (required)")
-	c.Flags().StringVar(&kind, "type", "", "what this is, e.g. \"build_log\", \"test_report\", \"artifact_windows\" — becomes source/rankegit_<type> (required)")
+	c.Flags().StringVar(&kind, "type", "", "what this is, e.g. \"build_log\", \"test_report\", \"artifact_windows\" — becomes source/git_<type> (required)")
 	c.Flags().StringVar(&name, "name", "", "a title for this attachment, e.g. \"release build log\" (required)")
 	c.Flags().StringVar(&contentType, "content-type", "text/plain", "the attachment's media type")
 	c.Flags().StringVar(&file, "file", "", "read content from this file instead of stdin")
@@ -104,7 +100,7 @@ func runAttach(cmd *cobra.Command, o *options, commitSha, typ, name, contentType
 	}
 
 	u := ranke.NewMemoryUniverse()
-	claim, err := buildAttachment(ctx, u, s.contributor, s.signer, *target, typ, name, contentType, content)
+	claim, err := buildAttachment(ctx, u, s.contributor, s.signer, *target, typ, name, contentType, content, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -113,11 +109,14 @@ func runAttach(cmd *cobra.Command, o *options, commitSha, typ, name, contentType
 
 // buildAttachment signs one source claim citing target via
 // relation/attached_to: content external, so two identical attachments (the
-// same log, reattached) share one content_hash.
+// same log, reattached) share one content_hash. A zero at defaults to now.
 func buildAttachment(
 	ctx context.Context, u ranke.Universe, contributor ranke.Contributor, signer crypto.Signer,
-	target reused, typ, name, contentType string, content []byte,
+	target reused, typ, name, contentType string, content []byte, at time.Time,
 ) (ranke.Claim, error) {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	id, err := ranke.HashContent(content)
 	if err != nil {
 		return nil, fmt.Errorf("attach: hash content: %w", err)
@@ -135,7 +134,7 @@ func buildAttachment(
 		WithExternalContent(id, uint64(len(content))).
 		WithEncoding(contentType).
 		WithField("name", name).
-		WithCreatedAt(time.Now().UTC()).
+		WithCreatedAt(at).
 		WithHeight(target.height + 1).
 		WithEdges(edge).
 		Sign(signer)

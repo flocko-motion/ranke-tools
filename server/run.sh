@@ -53,6 +53,7 @@ fi
 url="http://localhost${addr}"
 echo ">> $CONFIG — ephemeral signing key, in-memory storage, nothing persisted between runs"
 echo ">> serving on  $url"
+echo ">> explorer at $url/explorer"
 echo ">> try:  curl $url/health  ·  curl $url/branches  ·  curl $url/branches/main/head"
 echo ">> ctrl-c (or server/stop.sh from another shell) to stop"
 

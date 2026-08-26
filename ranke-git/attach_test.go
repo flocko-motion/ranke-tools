@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/flocko-motion/ranke-go"
 )
@@ -46,13 +47,13 @@ func TestBuildAttachmentShape(t *testing.T) {
 	target := reused{id: targetID, height: 3}
 
 	claim, err := buildAttachment(ctx, u, contributor, signer, target,
-		"source/"+attachTypePrefix+"build_log", "release build log", "text/plain", []byte("log body"))
+		"source/"+gitPrefix+"build_log", "release build log", "text/plain", []byte("log body"), time.Time{})
 	if err != nil {
 		t.Fatalf("buildAttachment: %v", err)
 	}
 
-	if got := claim.Node().Type(); got != "source/rankegit_build_log" {
-		t.Errorf("type = %q, want source/rankegit_build_log", got)
+	if got := claim.Node().Type(); got != "source/git_build_log" {
+		t.Errorf("type = %q, want source/git_build_log", got)
 	}
 	if got, err := claim.Node().GetField("name"); err != nil || got != "release build log" {
 		t.Errorf("name field = %q, %v, want %q", got, err, "release build log")

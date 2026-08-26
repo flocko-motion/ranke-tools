@@ -16,13 +16,20 @@ import (
 	"github.com/flocko-motion/ranke-go"
 )
 
+// gitPrefix namespaces every source/derivation subtype this tool mints —
+// bare words like "commit" invite collision in V-TYPE's shared vocabulary.
+// Just "git_", not "rankegit_": everything here is already ranke, so within
+// the ecosystem a "rankegit" adapter is simply a git one.
+// entity/* stays unprefixed: those are concepts, not this tool's own words.
+const gitPrefix = "git_"
+
 // The claim types this conversion produces.
 const (
-	nodeCommit     = "source/commit"
-	nodeTree       = "source/tree"
-	nodeBlob       = "source/blob"
-	nodeTag        = "source/tag" // an annotated tag object; a lightweight tag has none
-	nodeRef        = "source/ref" // a branch or tag name, as it resolved at backup time
+	nodeCommit     = "source/" + gitPrefix + "commit"
+	nodeTree       = "source/" + gitPrefix + "tree"
+	nodeBlob       = "source/" + gitPrefix + "blob"
+	nodeTag        = "source/" + gitPrefix + "tag" // an annotated tag object; a lightweight tag has none
+	nodeRef        = "source/" + gitPrefix + "ref" // a branch or tag name, as it resolved at backup time
 	nodeRepository = "entity/repository"
 	nodeProject    = "entity/project"
 )
@@ -133,18 +140,22 @@ func scopeMatch(scope []string, path string) scopeRelation {
 }
 
 // gitToClaims converts one commit: ref resolved, no parent history, scope
-// optional — snapshot's shape. p reuses what prepare already found.
+// optional — snapshot's shape. p reuses what prepare found; a zero at
+// defaults to now (a real command always passes zero).
 func gitToClaims(
 	ctx context.Context, g gitRepo, ref string, scope []string, u ranke.Universe,
-	contributor ranke.Contributor, signer crypto.Signer, repoURL, project string, p prep,
+	contributor ranke.Contributor, signer crypto.Signer, repoURL, project string, p prep, at time.Time,
 ) ([]ranke.Claim, error) {
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	sha, err := resolveCommit(g, ref)
 	if err != nil {
 		return nil, err
 	}
 	c := &converter{
 		ctx: ctx, git: g, u: u, contributor: contributor, signer: signer,
-		at: time.Now().UTC(), bySha: map[string]made{},
+		at: at, bySha: map[string]made{},
 		scope: normalizeScope(scope), scopeSeen: map[string]bool{}, prep: p,
 	}
 	commit, err := c.commit(sha)
@@ -173,18 +184,21 @@ func (r refSpec) fullRef() string {
 	return "refs/heads/" + r.name
 }
 
-// backupToClaims converts every commit reachable from refs, chained to their
-// parents, each ref its own source/ref claim (-> DESIGN.md, snapshot vs. backup).
+// backupToClaims converts every commit reachable from refs, chained to
+// parents, each ref its own nodeRef claim (-> DESIGN.md).
 func backupToClaims(
 	ctx context.Context, g gitRepo, refs []refSpec, u ranke.Universe,
-	contributor ranke.Contributor, signer crypto.Signer, repoURL, project string, p prep,
+	contributor ranke.Contributor, signer crypto.Signer, repoURL, project string, p prep, at time.Time,
 ) ([]ranke.Claim, error) {
 	if len(refs) == 0 {
 		return nil, fmt.Errorf("backup: no refs given")
 	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
 	c := &converter{
 		ctx: ctx, git: g, u: u, contributor: contributor, signer: signer,
-		at: time.Now().UTC(), bySha: map[string]made{}, followParents: true, prep: p,
+		at: at, bySha: map[string]made{}, followParents: true, prep: p,
 	}
 	var primary made
 	for i, r := range refs {
@@ -212,9 +226,8 @@ func (c *converter) finish(commit made, repoURL, project string) ([]ranke.Claim,
 	return c.claims, nil
 }
 
-// commit converts one commit, memoised by sha: parents first when
-// followParents is set, then its tree, then itself. Snapshot mode still
-// records a parent's sha as a field, uncaptured but honest (-> DESIGN.md).
+// commit converts one commit, memoised by sha, parents first if
+// followParents — snapshot still records an uncaptured parent's sha as a field.
 func (c *converter) commit(sha string) (made, error) {
 	if m, ok := c.bySha[sha]; ok {
 		return m, nil
@@ -310,7 +323,7 @@ func (c *converter) tree(sha, path string) (made, error) {
 		var child made
 		switch e.typ {
 		case "blob":
-			child, err = c.blob(e.sha)
+			child, err = c.blob(e.sha, entryPath)
 		case "tree":
 			child, err = c.tree(e.sha, entryPath)
 		default:
@@ -324,7 +337,7 @@ func (c *converter) tree(sha, path string) (made, error) {
 		}
 		edge, err := ranke.NewEdge(ranke.EdgeConfig{
 			Reference: child.id, Referenced: child.claim, Type: edgeEntry,
-			Fields: map[string]string{"name": e.name, "mode": e.mode},
+			Fields: map[string]string{"name": e.name, "mode": e.mode, "path": entryPath},
 		})
 		if err != nil {
 			return made{}, fmt.Errorf("tree %s: entry %q: %w", sha, e.name, err)
@@ -355,9 +368,10 @@ func (c *converter) markScopeSeen(entryPath string) {
 	}
 }
 
-// blob converts one git blob. Content is the file's bytes exactly, so an
-// unchanged file shares one content_hash no matter how many trees cite it.
-func (c *converter) blob(sha string) (made, error) {
+// blob converts one git blob: content is the file's bytes exactly, so an
+// unchanged file shares one content_hash across trees; path just records
+// where THIS mint first saw it — a later citation's own edge tracks that.
+func (c *converter) blob(sha, path string) (made, error) {
 	if m, ok := c.bySha[sha]; ok {
 		return m, nil
 	}
@@ -365,7 +379,7 @@ func (c *converter) blob(sha string) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("blob %s: cat-file: %w", sha, err)
 	}
-	m, err := c.write(nodeBlob, payload, map[string]string{gitShaField: sha}, 0, nil)
+	m, err := c.write(nodeBlob, payload, map[string]string{gitShaField: sha, "path": path}, 0, nil)
 	if err != nil {
 		return made{}, fmt.Errorf("blob %s: %w", sha, err)
 	}
@@ -374,10 +388,9 @@ func (c *converter) blob(sha string) (made, error) {
 }
 
 // ref resolves and converts one branch or tag: an annotated tag gets its own
-// source/tag claim, a lightweight tag or a branch points at the commit
-// directly. Either way the ref itself becomes a fresh source/ref claim — a
-// ref is a record of what a name pointed at THIS run, so it is never reused
-// from prep even when its target is.
+// nodeTag claim, a lightweight one or a branch points at the commit
+// directly. Either way the ref itself is a fresh nodeRef claim, never reused
+// from prep — it records what a name pointed at THIS run.
 func (c *converter) ref(g gitRepo, r refSpec) (struct{ ref, commit made }, error) {
 	full := r.fullRef()
 	typ, err := g.catFileType(full)
@@ -441,10 +454,8 @@ func (c *converter) tag(sha string, commit made) (made, error) {
 	return m, nil
 }
 
-// write builds one git-object claim: payload as external content, fields for
-// lookup (at least git_sha), edges already resolved — or, when prep already
-// found this exact content on the server, reuses its id and height without
-// minting or contributing anything for it.
+// write builds one git-object claim (external content, git_sha field, edges
+// resolved) — or, when prep already found this content, just reuses it.
 func (c *converter) write(typ string, payload []byte, fields map[string]string, childHeight uint64, edges []ranke.Edge) (made, error) {
 	id, err := ranke.HashContent(payload)
 	if err != nil {
@@ -473,7 +484,7 @@ func (c *converter) write(typ string, payload []byte, fields map[string]string, 
 	return made{id: claim.ID(), claim: claim, height: childHeight + 1}, nil
 }
 
-// repository reuses prep's match if crif found one; otherwise builds
+// repository reuses prep's match if one was found; otherwise builds
 // entity/repository fresh, D1-anchored to the commit that first evidenced
 // it — its url is what a restore needs back to reconfigure origin.
 func (c *converter) repository(repoURL string, commit made) (made, error) {
@@ -493,7 +504,7 @@ func (c *converter) repository(repoURL string, commit made) (made, error) {
 	return m, nil
 }
 
-// project reuses prep's match if crif found one; otherwise builds
+// project reuses prep's match if one was found; otherwise builds
 // entity/project fresh, D1-anchored like repository, plus a
 // relation/hosted_in edge — a binary fact needs no reified node (-> DESIGN.md).
 func (c *converter) project(name string, commit, repo made) (made, error) {
@@ -525,7 +536,7 @@ func (c *converter) project(name string, commit, repo made) (made, error) {
 }
 
 // writeFact builds one small claim with no git object of its own — an entity
-// or a ref: inline content, fields for a later crif lookup.
+// or a ref: inline content, fields for a later find-or-build lookup.
 func (c *converter) writeFact(typ string, content []byte, fields map[string]string, childHeight uint64, edges []ranke.Edge) (made, error) {
 	b := ranke.NewClaim(typ, c.contributor).
 		WithInlineContent(content).
@@ -544,10 +555,9 @@ func (c *converter) writeFact(typ string, content []byte, fields map[string]stri
 	return made{id: claim.ID(), claim: claim, height: childHeight + 1}, nil
 }
 
-// claimsToGit restores claims into dest: objects replayed through git's own
-// writer, then every ref recreated from its points_at edge, then origin from
-// the repository entity's url (-> DESIGN.md). commitSha is the last commit
-// written; refs is what tells branches and tags apart in a backup.
+// claimsToGit restores claims into dest: objects replayed, refs recreated
+// from their points_at edge, origin from the repository entity's url
+// (-> DESIGN.md). refs distinguishes branches from tags in a backup.
 func claimsToGit(ctx context.Context, dest gitRepo, u ranke.Universe, claims []ranke.Claim) (commitSha string, refs map[string]string, err error) {
 	byID := make(map[string]ranke.Claim, len(claims))
 	for _, claim := range claims {
