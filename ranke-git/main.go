@@ -115,7 +115,7 @@ func rootCmd() *cobra.Command {
 	f.StringVar(&o.project, "project", "", "the project name — its own entity, distinct from the repo (required)")
 	f.StringVar(&o.branch, "branch", "main", "the ranke-db branch this run contributes onto")
 	f.StringSliceVar(&o.paths, "path", nil, "restrict to this path within the repo (repeatable; monorepo subset)")
-	root.AddCommand(snapshotCmd(&o), backupCmd(&o), attachCmd(&o), scanCmd(&o), demoCmd(&o))
+	root.AddCommand(snapshotCmd(&o), backupCmd(&o), attachCmd(&o), scanCmd(&o), identityCmd(&o), demoCmd(&o))
 	return root
 }
 

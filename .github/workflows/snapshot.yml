@@ -1,0 +1,45 @@
+name: Snapshot
+
+# Archives every push to main into the live ranke-db this repo documents its
+# own development in — one real commit at a time, dated today, so the graph
+# grows forward without ever needing to backfill (and risk non-monotonic)
+# history. Inert until RANKE_DB_SERVER is configured (see ranke-git/DESIGN.md,
+# "Provisioning a real identity"): no deployment yet, so this no-ops rather
+# than failing every push.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Snapshot this commit
+        env:
+          RANKE_DB_SERVER: ${{ secrets.RANKE_DB_SERVER }}
+          RANKE_GIT_CONTRIBUTOR_ID: ${{ secrets.RANKE_GIT_CONTRIBUTOR_ID }}
+          RANKE_GIT_SIGNING_KEY: ${{ secrets.RANKE_GIT_SIGNING_KEY }}
+        run: |
+          if [ -z "$RANKE_DB_SERVER" ]; then
+            echo "RANKE_DB_SERVER not set — no ranke-db deployment configured yet, skipping"
+            exit 0
+          fi
+          key="$(mktemp)"
+          printf '%s' "$RANKE_GIT_SIGNING_KEY" >"$key"
+          go run ./ranke-git snapshot \
+            --server "$RANKE_DB_SERVER" \
+            --contributor-id "$RANKE_GIT_CONTRIBUTOR_ID" \
+            --signing-key "$key" \
+            --clone . \
+            --repo "https://github.com/${{ github.repository }}.git" \
+            --project ranke-tools \
+            --branch ranke-tools \
+            --ref "${{ github.sha }}"
+          rm -f "$key"
