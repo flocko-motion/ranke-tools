@@ -5,6 +5,7 @@ go 1.26.4
 require (
 	github.com/flocko-motion/ranke-go v0.24.0
 	github.com/spf13/cobra v1.10.2
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

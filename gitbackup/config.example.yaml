@@ -1,0 +1,24 @@
+# gitbackup config — an alternative to typing every flag by hand.
+#
+# Copy this file, fill it in, and pass --config path/to/it.yaml. Any flag given
+# on the command line still wins over what's here, so a shared config plus a
+# one-off --branch override on the command line works as you'd expect.
+
+server: https://ranke-db.example.com
+# One credential; the endpoint rejects two as ambiguous.
+token: ""
+api_key: ""
+
+contributor_id: ""
+signing_key: /path/to/contributor.pem
+
+repo: https://github.com/acme/widgets.git
+# clone: /path/to/an/existing/checkout   # read this instead of cloning `repo`
+
+project: widgets
+branch: main
+
+# Monorepo subset — omit entirely to archive the whole tree.
+# paths:
+#   - services/api
+#   - libs/shared

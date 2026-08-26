@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -21,6 +22,7 @@ func main() {
 
 // options are the flags every action shares: where to write, as whom, and what repo.
 type options struct {
+	configPath    string   // --config; a YAML alternative to typing every flag by hand
 	server        string   // the ranke-db REST base URL
 	token         string   // Authorization: Bearer credential
 	apiKey        string   // X-API-Key credential
@@ -33,6 +35,57 @@ type options struct {
 	paths         []string // optional monorepo subset; empty archives the whole tree
 }
 
+// fileConfig is --config's YAML shape — one field per flag this run cares
+// about, so a config file is a persistent stand-in for typing them by hand.
+type fileConfig struct {
+	Server        string   `yaml:"server"`
+	Token         string   `yaml:"token"`
+	APIKey        string   `yaml:"api_key"`
+	ContributorID string   `yaml:"contributor_id"`
+	SigningKey    string   `yaml:"signing_key"`
+	Repo          string   `yaml:"repo"`
+	Clone         string   `yaml:"clone"`
+	Project       string   `yaml:"project"`
+	Branch        string   `yaml:"branch"`
+	Paths         []string `yaml:"paths"`
+}
+
+// loadConfig fills whatever o.configPath's file sets and the command line
+// didn't — a flag given on the command line always wins, checked through
+// cmd.Flags().Changed rather than a zero-value guess, since "main" (branch's
+// own default) is a legitimate value either side could have meant.
+func (o *options) loadConfig(cmd *cobra.Command) error {
+	if o.configPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(o.configPath)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	var c fileConfig
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		return fmt.Errorf("config: %s: %w", o.configPath, err)
+	}
+	fromFile := func(flag string, dst *string, val string) {
+		if val != "" && !cmd.Flags().Changed(flag) {
+			*dst = val
+		}
+	}
+	fromFile("server", &o.server, c.Server)
+	fromFile("token", &o.token, c.Token)
+	fromFile("api-key", &o.apiKey, c.APIKey)
+	fromFile("contributor-id", &o.contributorID, c.ContributorID)
+	fromFile("signing-key", &o.signingKey, c.SigningKey)
+	fromFile("repo", &o.repoURL, c.Repo)
+	fromFile("clone", &o.clone, c.Clone)
+	fromFile("project", &o.project, c.Project)
+	fromFile("branch", &o.branch, c.Branch)
+	if len(c.Paths) > 0 && !cmd.Flags().Changed("path") {
+		o.paths = c.Paths
+	}
+	return nil
+}
+
 // rootCmd builds the gitbackup command tree: one subcommand per action.
 func rootCmd() *cobra.Command {
 	var o options
@@ -41,8 +94,12 @@ func rootCmd() *cobra.Command {
 		Short:         "Archive git state into a running ranke-db, byte-exact and content-deduplicated",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return o.loadConfig(cmd)
+		},
 	}
 	f := root.PersistentFlags()
+	f.StringVar(&o.configPath, "config", "", "path to a YAML config file — an alternative to the flags below; a flag given on the command line still wins (see config.example.yaml)")
 	f.StringVar(&o.server, "server", "", "the ranke-db REST base URL (required)")
 	f.StringVar(&o.token, "token", "", "Authorization: Bearer credential")
 	f.StringVar(&o.apiKey, "api-key", "", "X-API-Key credential")
