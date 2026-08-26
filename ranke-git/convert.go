@@ -18,9 +18,7 @@ import (
 
 // gitPrefix namespaces every source/derivation subtype this tool mints —
 // bare words like "commit" invite collision in V-TYPE's shared vocabulary.
-// Just "git_", not "rankegit_": everything here is already ranke, so within
-// the ecosystem a "rankegit" adapter is simply a git one.
-// entity/* stays unprefixed: those are concepts, not this tool's own words.
+// Just "git_": everything here is already ranke, no need to say so twice.
 const gitPrefix = "git_"
 
 // The claim types this conversion produces.
@@ -49,6 +47,10 @@ const (
 	gitShaField    = "git_sha"
 	parentShaField = "parent_git_sha"
 )
+
+// versionField records which ranke-git built the commit claim — the head of
+// a snapshot/backup, never a file — restoring a later breaking change with.
+const versionField = "ranke_git_version"
 
 // made is a claim this walk knows about: built fresh (claim set), or already
 // on the server and reused (claim nil — nothing new to contribute for it).
@@ -140,8 +142,7 @@ func scopeMatch(scope []string, path string) scopeRelation {
 }
 
 // gitToClaims converts one commit: ref resolved, no parent history, scope
-// optional — snapshot's shape. p reuses what prepare found; a zero at
-// defaults to now (a real command always passes zero).
+// optional — snapshot's shape. A zero at defaults to now.
 func gitToClaims(
 	ctx context.Context, g gitRepo, ref string, scope []string, u ranke.Universe,
 	contributor ranke.Contributor, signer crypto.Signer, repoURL, project string, p prep, at time.Time,
@@ -236,7 +237,7 @@ func (c *converter) commit(sha string) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("commit %s: parents: %w", sha, err)
 	}
-	fields := map[string]string{gitShaField: sha}
+	fields := map[string]string{gitShaField: sha, versionField: version}
 	if len(parents) > 0 {
 		fields[parentShaField] = strings.Join(parents, ",")
 	}

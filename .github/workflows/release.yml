@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # `make build` builds every $(TOOLS) entry (Makefile) into bin/ — reused here
+      # rather than a hardcoded tool list, so a new tool just works. Static
+      # (CGO_ENABLED=0): no cgo dependency, and a static binary is what a downloader
+      # can run without matching the build host's libc. All tools share one version
+      # — the tag — released as a bundle (LDFLAGS: main.version, each tool's own
+      # main package; every claim ranke-git's commits carry it, versionField).
+      - name: Build every tool
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          LDFLAGS: -X main.version=${{ github.ref_name }}
+        run: |
+          make build
+          mkdir -p dist
+          for f in bin/*; do
+            mv "$f" "dist/$(basename "$f")-${{ matrix.goos }}-${{ matrix.goarch }}"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A tag carrying a hyphen is a release candidate (`make release pre`), and
+      # says so: unmarked it would take the repo's "latest release", which is
+      # what a downloader's `/releases/latest` resolves to.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/*

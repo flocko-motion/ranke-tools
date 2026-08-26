@@ -21,9 +21,14 @@ BROKKR_INSTALL_SH := https://raw.githubusercontent.com/flocko-motion/sindri/mast
 # ranke-git, rather than hand-writing a second build recipe for it.
 TOOLS := ranke-git
 
+# Empty for a plain dev build (main.version stays "dev"); the release workflow
+# sets it to stamp the tag into every tool's own main package.
+LDFLAGS ?=
+
 RANKE_DB_REPO ?= flocko-motion/ranke-db
 
-.PHONY: all help build test vet fmt lint check tidy docs docs-clean upgrade
+.PHONY: all help build test vet fmt lint check tidy docs docs-clean upgrade \
+        release-gate release major minor patch breaking feature fix
 
 .DEFAULT_GOAL := all
 
@@ -33,10 +38,10 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-build: ## Build every tool's binary into bin/
+build: ## Build every tool's binary into bin/ (LDFLAGS to stamp a version, e.g. LDFLAGS="-X main.version=v1.2.3")
 	@for t in $(TOOLS); do \
 		echo ">> build   → bin/$$t"; \
-		go build -o bin/$$t ./$$t || exit 1; \
+		go build -ldflags "$(LDFLAGS)" -o bin/$$t ./$$t || exit 1; \
 	done
 
 test: ## Test all packages; scope with make test/<pkg> (e.g. test/ranke-git)
@@ -105,3 +110,11 @@ upgrade: ## Bump server/.rankedb-version to ranke-db's latest release and instal
 		echo "$$latest" > server/.rankedb-version; \
 	fi
 	@./server/install.sh
+
+release-gate: check ## Run the pre-release quality gate without releasing
+
+release: release-gate ## Release every tool as one bundle, same version (bump: major|minor|patch, aliases breaking|feature|fix)
+	@./scripts/release.sh $(filter major minor patch breaking feature fix,$(MAKECMDGOALS))
+
+major minor patch breaking feature fix:
+	@:

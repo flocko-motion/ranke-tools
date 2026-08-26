@@ -11,11 +11,16 @@ same repo.
 
 One Go module, one subdirectory per tool.
 
+Every tool shares one version, released as one bundle (`make release`) — see each
+tool's own manual for what that version actually does.
+
 ## Tools
 
-- [`ranke-git`](./ranke-git/) — archives an exact git tree (or a repo's full history)
-  into a Ranke-Graph archive, byte-exact and content-deduplicated, and attaches
-  arbitrary content (build logs, artifacts, reports) onto an archived commit.
+- [`ranke-git`](./ranke-git/README.md) — archives an exact git tree (or a repo's
+  full history) into a Ranke-Graph archive, byte-exact and content-deduplicated,
+  attaches arbitrary content (build logs, artifacts, reports) onto an archived
+  commit, records vulnerability scan findings, and provisions the contributor
+  identities all of that signs as.
 
 ## Running a dev server
 

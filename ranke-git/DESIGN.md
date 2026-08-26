@@ -29,9 +29,15 @@ own subtype prefix).
 
 - **`source/git_commit`** — one claim per git commit. Content is git's own
   raw commit object bytes, verbatim, stored external (`content_hash`). Fields
-  carry the git commit sha for lookup (`git_sha`) and, in snapshot mode, the
-  parent's git sha as a plain field even when no parent claim exists to cite (an
-  honest record of what wasn't captured, not a broken reference).
+  carry the git commit sha for lookup (`git_sha`), a `ranke_git_version` field
+  recording which release built it (`main.go`'s `version`, stamped at release
+  build time — a later breaking change to how trees/blobs are shaped still has
+  an old tool version on hand to restore against; catching and handling that is
+  the newer version's own job, not something baked into every file claim — this
+  field lives only here, not on trees/blobs/tags/refs, exactly because it's the
+  head a restore starts from, not a per-file concern), and, in snapshot mode,
+  the parent's git sha as a plain field even when no parent claim exists to
+  cite (an honest record of what wasn't captured, not a broken reference).
 - **`source/git_tree`** — one claim per git tree object (one per directory
   level, nested — never flattened). Content is git's raw tree object bytes,
   external. Cites each entry (blob or subtree) via an edge carrying

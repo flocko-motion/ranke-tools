@@ -18,6 +18,12 @@ import (
 	"github.com/flocko-motion/ranke-go"
 )
 
+// version is stamped at release build time (-ldflags "-X main.version=vX.Y.Z",
+// .github/workflows/release.yml) — every claim ranke-git mints records it
+// (versionField, convert.go), so a later breaking change still has an old
+// tool version on hand to restore an archive with.
+var version = "dev"
+
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "ranke-git:", err)
@@ -97,6 +103,7 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "ranke-git",
 		Short:         "Archive git state into a running ranke-db, byte-exact and content-deduplicated",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

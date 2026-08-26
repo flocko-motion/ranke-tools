@@ -378,6 +378,35 @@ func TestBlobAndEntryPathFields(t *testing.T) {
 	}
 }
 
+// TestVersionFieldOnlyOnCommit pins that ranke_git_version lands on the
+// commit claim only, never on trees/blobs (-> DESIGN.md).
+func TestVersionFieldOnlyOnCommit(t *testing.T) {
+	old := version
+	version = "vTest"
+	defer func() { version = old }()
+
+	src := t.TempDir()
+	g := initRepo(t, src)
+	writeFile(t, src, "a.txt", []byte("content\n"), 0o644)
+	sha := commitAll(t, g, "version field")
+
+	contributor, signer := testIdentity(t)
+	u := ranke.NewMemoryUniverse()
+	claims, err := gitToClaims(context.Background(), g, sha, nil, u, contributor, signer, testRepoURL, testProject, prep{}, time.Time{})
+	if err != nil {
+		t.Fatalf("gitToClaims: %v", err)
+	}
+
+	commit := findByType(t, claims, nodeCommit)
+	if got, err := commit.Node().GetField(versionField); err != nil || got != "vTest" {
+		t.Errorf("commit's %s = %q, %v, want %q", versionField, got, err, "vTest")
+	}
+	tree := findByType(t, claims, nodeTree)
+	if _, err := tree.Node().GetField(versionField); err == nil {
+		t.Errorf("tree claim carries %s, want it commit-only", versionField)
+	}
+}
+
 // mustFindByPath returns the blob claim a tree entry edge cites under path,
 // by walking every claim's entry edges for one whose path field matches.
 func mustFindByPath(t *testing.T, claims []ranke.Claim, path string) ranke.Claim {
