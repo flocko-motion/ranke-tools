@@ -53,7 +53,7 @@ func runDemo(out io.Writer) error {
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
 	claims, err := backupToClaims(ctx, g, refs, u, contributor, signer,
-		"https://example.com/demo/gitbackup.git", "gitbackup-demo")
+		"https://example.com/demo/gitbackup.git", "gitbackup-demo", prep{})
 	if err != nil {
 		return err
 	}

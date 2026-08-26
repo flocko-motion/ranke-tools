@@ -79,12 +79,13 @@ worker citing the dump an `.eml` was split from). This design uses:
 repo", "this project" — as opposed to the concrete captured material. Each needs a
 path back to a source (`D1`), satisfied once, at creation:
 
-- Every run today mints both fresh, `derivation/input`-anchored to that run's
-  primary commit — there is no server yet to query against for an existing one
-  (phase 2). Eventually: `crif` = query first (by a stable field, e.g. `url` for
-  the repo, `name` for the project), reuse the id if found, mint only if not —
-  two independent runs won't converge on the same entity id by content-addressing
-  alone (`created_at` differs), so this has to stay an explicit lookup.
+- `crif` (`prepare.go`'s `findOne`): query first, by a stable field (`url` for the
+  repo, `name` for the project); reuse the id and height if found, mint fresh —
+  `derivation/input`-anchored to that run's primary commit — if not. Two
+  independent runs won't converge on the same entity id by content-addressing
+  alone (`created_at` differs), so this stays an explicit lookup rather than
+  something automatic. Built and verified live: a second run against the same
+  repo/project reuses both entities, contributing neither again.
 - A project's "lives in this repo" fact is a `relation/*` edge directly on the
   `entity/project` claim, pointing at the repo entity — a plain binary fact needs
   no reified `relation/*` node; reification is for genuine n:n relations between
@@ -97,24 +98,39 @@ a commit reachable from two refs, an unchanged subtree, or a repeated blob becom
 one claim, cited more than once rather than rebuilt — this part is built and
 tested (`TestRoundTripDedupesRepeatedBlobs`, `TestBackupRoundTripIsByteExact`).
 
-## Dedup across separate runs (phase 2, not built yet)
+## Dedup across separate runs
 
 `content_hash` is the reuse key at every level — `source/commit` and `source/tree`
 get one from their external raw-bytes content the same way `source/blob` always
 has, and unlike a claim's own id, `content_hash` is time-independent (no
 `created_at` in it), so it's stable across separate runs, unlike `bySha`'s
-in-memory map above which starts empty every run. The intent: before minting
-anything, pre-fetch a `content_hash → id` map by walking from the repo entity —
-follow every `relation/snapshot_of` edge back to a `source/commit`, then its trees
-and blobs — scoped to this repo's own history on purpose, not global, so a rerun's
-lookups stay cheap and referencing stays inside claims this tool's own account can
-already read. Needs a live archive to query against, so it waits on phase 2.
+in-memory map above which starts empty every run.
+
+`prepare.go`'s `scanContentHashes` queries every `source/commit`/`tree`/`blob`/`tag`
+claim **on the destination branch**, keyed by `content_hash`, before the build
+phase mints anything — a flat type filter, not a graph walk from the repo entity
+as first sketched: simpler, and equivalent in effect as long as one branch holds
+one repo's history, which is this tool's own convention. The trade-off is real
+though — a branch shared by more than one repo would pool their content_hashes
+together too (harmless dedup, but worth knowing it isn't strictly repo-scoped).
+`converter.write` checks this map before minting a git-object claim; `converter`
+never even calls `PutContents`/`Sign` for something already found there.
+
+Verified live against a running instance: an unchanged re-run of the same
+commit contributes nothing at all ("everything was already archived"); a
+one-file change contributes exactly the changed blob, the tree that now cites
+it, and the new commit — three claims, not the whole tree again.
 
 ## Not yet decided
 
-- The RQL query shape for the repo-entity pre-fetch walk (phase 2).
-- CLI flag finalization for `snapshot`/`backup` themselves — both still say "not
-  yet implemented"; only the conversion functions and `demo` are wired up so far.
+- Cloning `--repo` directly. `--clone` (an existing local checkout) is the only
+  path in today; a bare `--repo` with no `--clone` refuses rather than cloning.
+- Enumerating "every branch/tag" for `backup` — today's `--git-branch`/`--git-tag`
+  are named explicitly, not discovered from the repo.
+- `relation/snapshot_of` (see Edges above): once crif finds an existing entity,
+  nothing yet records that *this* run's commit also relates to it — only the
+  founding commit's `derivation/input` edge does. Worth adding once something
+  needs to walk "every snapshot of this repo," not just "the first one."
 - Whether `entity/artifact` (an artifact as its own stable, referenceable thing —
   D1-anchored to a `derivation/build` citing the snapshot) is worth adding now or
   only once something actually needs to query artifacts as things across builds.

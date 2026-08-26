@@ -199,7 +199,7 @@ func TestRoundTripIsByteExact(t *testing.T) {
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
 
-	claims, err := gitToClaims(ctx, g, origSha, nil, u, contributor, signer, testRepoURL, testProject)
+	claims, err := gitToClaims(ctx, g, origSha, nil, u, contributor, signer, testRepoURL, testProject, prep{})
 	if err != nil {
 		t.Fatalf("gitToClaims: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestRoundTripDedupesRepeatedBlobs(t *testing.T) {
 
 	contributor, signer := testIdentity(t)
 	u := ranke.NewMemoryUniverse()
-	claims, err := gitToClaims(context.Background(), g, sha, nil, u, contributor, signer, testRepoURL, testProject)
+	claims, err := gitToClaims(context.Background(), g, sha, nil, u, contributor, signer, testRepoURL, testProject, prep{})
 	if err != nil {
 		t.Fatalf("gitToClaims: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestSubmoduleIsRefused(t *testing.T) {
 
 	contributor, signer := testIdentity(t)
 	u := ranke.NewMemoryUniverse()
-	_, err = gitToClaims(context.Background(), g, sha, nil, u, contributor, signer, testRepoURL, testProject)
+	_, err = gitToClaims(context.Background(), g, sha, nil, u, contributor, signer, testRepoURL, testProject, prep{})
 	if err == nil {
 		t.Fatal("gitToClaims accepted a gitlink, want a refusal")
 	}
@@ -407,7 +407,7 @@ func TestBackupRoundTripIsByteExact(t *testing.T) {
 	contributor, signer := testIdentity(t)
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
-	claims, err := backupToClaims(ctx, g, refs, u, contributor, signer, testRepoURL, testProject)
+	claims, err := backupToClaims(ctx, g, refs, u, contributor, signer, testRepoURL, testProject, prep{})
 	if err != nil {
 		t.Fatalf("backupToClaims: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestScopedCapture(t *testing.T) {
 	contributor, signer := testIdentity(t)
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
-	claims, err := gitToClaims(ctx, g, "v1", []string{"services/api"}, u, contributor, signer, testRepoURL, testProject)
+	claims, err := gitToClaims(ctx, g, "v1", []string{"services/api"}, u, contributor, signer, testRepoURL, testProject, prep{})
 	if err != nil {
 		t.Fatalf("gitToClaims: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestScopedCaptureRefusesAnUnreachedPath(t *testing.T) {
 
 	contributor, signer := testIdentity(t)
 	u := ranke.NewMemoryUniverse()
-	_, err := gitToClaims(context.Background(), g, sha, []string{"does/not/exist"}, u, contributor, signer, testRepoURL, testProject)
+	_, err := gitToClaims(context.Background(), g, sha, []string{"does/not/exist"}, u, contributor, signer, testRepoURL, testProject, prep{})
 	if err == nil {
 		t.Fatal("gitToClaims accepted a scope path that doesn't exist, want a refusal")
 	}
