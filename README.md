@@ -22,6 +22,8 @@ tool's own manual for what that version actually does.
   commit, records vulnerability scan findings, and provisions the contributor
   identities all of that signs as.
 
+More tools are coming soon.
+
 ## Running a dev server
 
 `server/run.sh` runs the `ranke-db` release binary `server/.rankedb-version` pins,
