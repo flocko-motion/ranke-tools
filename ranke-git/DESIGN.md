@@ -137,6 +137,40 @@ is touched — `attach` finds its target purely by querying the branch for the
 `source/commit` claim with a matching `git_sha` (`findOne`, the same helper
 crif uses), then contributes one claim. `--file` or stdin supplies the bytes.
 
+## Vulnerability scans
+
+`ranke-git scan` records a scan's findings against an already-archived commit — one
+`derivation/vulnerability_scan` claim per run, unlike `attach`: the raw tool output
+(when archived) is received like a source, but the claim itself asserts an
+interpretation ("scanning this commit found these CVEs"), which is what `derivation`
+is for here — a convention for this tool's own claims, not a general rule (the class
+boundary itself isn't formally decidable; the foundation paper leaves it to the
+application).
+
+- `entity/cve` — `crif`'d exactly like `entity/repository`/`entity/project`
+  (`findOrBuildCVE` reuses `findOne`), fields `{cve_id, url (optional)}`, no content,
+  D1-anchored via `derivation/input` to the commit on first mint. Unprefixed, unlike
+  `attach`'s `rankegit_` types — "CVE" is an external, standardized identifier
+  namespace already, not an open word another tool might mean something else by.
+- The scan claim cites the commit via `derivation/input` (an interpretation of its
+  source, unlike `attach`'s `relation/attached_to`) and each finding via one
+  `relation/cve` edge per CVE — a claim can carry several edges of the same type to
+  different targets, so N findings is just N edges, no reified node needed (a scan's
+  findings belong to that one scan, not an independent fact needing its own identity).
+- Content is optional: `--file` archives the scanner's raw output (external, same
+  shape as everything else here) when given, entirely absent when not — `V-CONTENT`
+  permits a claim with neither inline nor external content, confirmed against both
+  the spec and `ranke-go`'s `ClaimBuilder.Sign()` before relying on it, and live
+  against a running instance (`buildScan`'s contentless path signs and contributes).
+  Re-scanning the same commit for the same CVEs mints no new `entity/cve` (crif
+  reuse) but always a fresh scan claim — each run is its own event, not expected to
+  dedupe the way an unchanged file does (same reasoning as attach's own content-hash
+  question below).
+
+Built and verified live: `entity/cve` reused across separate `scan` runs and across
+different findings sharing one CVE, and a contentless scan claim round-trips through
+a real contribute.
+
 ## Sending content
 
 `WriteClaim` carries only a claim's own record — for external content that's
