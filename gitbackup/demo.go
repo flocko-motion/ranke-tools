@@ -1,7 +1,8 @@
 // package: main / gitbackup
 // type:    entrypoint
-// job:     `gitbackup demo` — a small fixture repo, converted and restored, both kept on
-// disk to look at — illustrative only, not one of the tool's two real actions
+// job:     `gitbackup demo` — a small multi-commit, multi-branch, tagged repo, backed up
+// and restored, both kept on disk to look at — illustrative only, not one of the tool's
+// two real actions
 // limits:  no ranke-db, same as the rest of phase one (-> convert_test.go for real coverage)
 package main
 
@@ -22,16 +23,17 @@ import (
 func demoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "demo",
-		Short: "Build a small fixture repo, convert it, and restore it — keeps both so you can look",
+		Short: "Back up a small multi-branch, tagged repo, and restore it — keeps both so you can look",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDemo(cmd.OutOrStdout())
 		},
 	}
 }
 
-// runDemo mirrors what TestRoundTripIsByteExact proves, but writes to fixed,
-// printed, never-cleaned-up paths — the test is the real coverage, this is
-// for a human to look at.
+// runDemo mirrors what the backup tests prove — several commits, a second
+// branch, an annotated and a lightweight tag — but writes to fixed, printed,
+// never-cleaned-up paths. The tests are the real coverage; this is for a
+// human to look at.
 func runDemo(out io.Writer) error {
 	base, err := os.MkdirTemp("", "gitbackup-demo-")
 	if err != nil {
@@ -39,11 +41,7 @@ func runDemo(out io.Writer) error {
 	}
 	src, dst := filepath.Join(base, "src"), filepath.Join(base, "dst")
 
-	g, err := demoBuildRepo(src)
-	if err != nil {
-		return err
-	}
-	commitSha, err := g.revParse("HEAD")
+	g, refs, err := demoBuildRepo(src)
 	if err != nil {
 		return err
 	}
@@ -54,7 +52,7 @@ func runDemo(out io.Writer) error {
 	}
 	u := ranke.NewMemoryUniverse()
 	ctx := context.Background()
-	claims, err := gitToClaims(ctx, g, commitSha, u, contributor, signer,
+	claims, err := backupToClaims(ctx, g, refs, u, contributor, signer,
 		"https://example.com/demo/gitbackup.git", "gitbackup-demo")
 	if err != nil {
 		return err
@@ -67,69 +65,117 @@ func runDemo(out io.Writer) error {
 	if _, err := dstRepo.run("init", "-q"); err != nil {
 		return err
 	}
-	restoredSha, err := claimsToGit(ctx, dstRepo, u, claims)
+	_, restoredRefs, err := claimsToGit(ctx, dstRepo, u, claims)
 	if err != nil {
 		return err
 	}
-	if _, err := dstRepo.run("checkout", "-q", "--detach", restoredSha); err != nil {
+	if _, err := dstRepo.run("checkout", "-q", "main"); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(out, "%d claims built\n\n", len(claims))
-	fmt.Fprintf(out, "source repo:   %s (commit %s)\n", src, commitSha)
-	fmt.Fprintf(out, "restored repo: %s (commit %s)\n", dst, restoredSha)
-	if commitSha == restoredSha {
-		fmt.Fprintln(out, "byte-exact: the two commit shas match")
+	fmt.Fprintf(out, "source repo:   %s\n", src)
+	fmt.Fprintf(out, "restored repo: %s\n\n", dst)
+	fmt.Fprintln(out, "refs restored:")
+	for _, r := range refs {
+		orig, err := g.revParse(r.fullRef())
+		if err != nil {
+			return err
+		}
+		match := "MISMATCH"
+		if restoredRefs[r.name] == orig {
+			match = "matches"
+		}
+		fmt.Fprintf(out, "  %-7s %-10s %s (%s)\n", r.kind, r.name, restoredRefs[r.name], match)
 	}
-	fmt.Fprintf(out, "\nlook around:\n  cd %s && git log --stat\n  cd %s && git log --stat && git remote -v\n  diff -rq %s %s -x .git\n", src, dst, src, dst)
+	fmt.Fprintf(out, "\nlook around:\n  cd %s && git log --oneline --graph --all\n  cd %s && git log --oneline --graph --all && git remote -v\n  diff -rq %s %s -x .git\n", src, dst, src, dst)
 	return nil
 }
 
-// demoBuildRepo creates a small repo exercising an ordinary file, an
-// executable one, a nested path, and a symlink — the shapes the round trip
-// has to carry, not an exhaustive fixture (that's the test's job).
-func demoBuildRepo(dir string) (gitRepo, error) {
+// demoBuildRepo creates a small repo with real history to back up: two
+// commits on main, a branch diverging from the first, an annotated tag and a
+// lightweight one on main's tip — everything backup mode has to carry that
+// snapshot mode does not (-> DESIGN.md).
+func demoBuildRepo(dir string) (gitRepo, []refSpec, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return gitRepo{}, err
+		return gitRepo{}, nil, err
 	}
 	g := gitRepo{dir: dir}
 	for _, args := range [][]string{
-		{"init", "-q"},
+		{"init", "-q", "-b", "main"},
 		{"config", "user.name", "Demo"},
 		{"config", "user.email", "demo@example.com"},
 	} {
 		if _, err := g.run(args...); err != nil {
-			return gitRepo{}, err
+			return gitRepo{}, nil, err
 		}
 	}
-	files := []struct {
-		rel  string
-		body string
-		mode os.FileMode
-	}{
+
+	if err := demoCommit(g, []demoFile{
 		{"README.md", "gitbackup demo\n", 0o644},
 		{"bin/run.sh", "#!/bin/sh\necho hi\n", 0o755},
-		{"pkg/sub/a.go", "package sub\n", 0o644},
+	}, "first commit"); err != nil {
+		return gitRepo{}, nil, err
 	}
+	if err := demoCommit(g, []demoFile{
+		{"pkg/sub/a.go", "package sub\n", 0o644},
+	}, "second commit"); err != nil {
+		return gitRepo{}, nil, err
+	}
+
+	if _, err := g.run("branch", "feature", "main~1"); err != nil {
+		return gitRepo{}, nil, err
+	}
+	if _, err := g.run("checkout", "-q", "feature"); err != nil {
+		return gitRepo{}, nil, err
+	}
+	if err := demoCommit(g, []demoFile{
+		{"feature.txt", "work in progress\n", 0o644},
+	}, "feature commit"); err != nil {
+		return gitRepo{}, nil, err
+	}
+	if _, err := g.run("checkout", "-q", "main"); err != nil {
+		return gitRepo{}, nil, err
+	}
+
+	if _, err := g.run("tag", "v1.0-lw"); err != nil {
+		return gitRepo{}, nil, err
+	}
+	if _, err := g.run("tag", "-a", "v1.0", "-m", "release 1.0"); err != nil {
+		return gitRepo{}, nil, err
+	}
+
+	refs := []refSpec{
+		{kind: "branch", name: "main"},
+		{kind: "branch", name: "feature"},
+		{kind: "tag", name: "v1.0"},
+		{kind: "tag", name: "v1.0-lw"},
+	}
+	return g, refs, nil
+}
+
+type demoFile struct {
+	rel  string
+	body string
+	mode os.FileMode
+}
+
+// demoCommit writes files (on top of whatever's already there) and commits.
+func demoCommit(g gitRepo, files []demoFile, message string) error {
 	for _, f := range files {
-		path := filepath.Join(dir, f.rel)
+		path := filepath.Join(g.dir, f.rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return gitRepo{}, err
+			return err
 		}
 		if err := os.WriteFile(path, []byte(f.body), f.mode); err != nil {
-			return gitRepo{}, err
+			return err
 		}
 	}
-	if err := os.Symlink("README.md", filepath.Join(dir, "link-to-readme")); err != nil {
-		return gitRepo{}, err
-	}
 	if _, err := g.run("add", "-A"); err != nil {
-		return gitRepo{}, err
+		return err
 	}
-	if _, err := g.run("commit", "-q", "-m", "demo commit"); err != nil {
-		return gitRepo{}, err
-	}
-	return g, nil
+	_, err := g.run("commit", "-q", "-m", message)
+	return err
 }
 
 // demoIdentity mints a throwaway root contributor — never an application's

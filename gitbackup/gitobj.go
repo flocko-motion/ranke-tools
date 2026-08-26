@@ -52,6 +52,29 @@ func (g gitRepo) commitTree(sha string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// commitParents returns sha's parent commit shas, in order — empty for a root commit.
+func (g gitRepo) commitParents(sha string) ([]string, error) {
+	out, err := g.run("log", "-1", "--format=%P", sha)
+	if err != nil {
+		return nil, err
+	}
+	if line := strings.TrimSpace(string(out)); line != "" {
+		return strings.Fields(line), nil
+	}
+	return nil, nil
+}
+
+// catFileType reports what object a ref currently resolves to, without
+// peeling it — "tag" for an annotated tag, "commit" for a lightweight tag or
+// a branch. That distinction is the whole difference between the two.
+func (g gitRepo) catFileType(ref string) (string, error) {
+	out, err := g.run("cat-file", "-t", ref)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // treeEntry is one line of `git ls-tree`, already split into what a tree object's
 // payload encodes: a mode, a type, a child sha, and a name.
 type treeEntry struct {
