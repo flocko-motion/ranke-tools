@@ -37,7 +37,17 @@ own subtype prefix).
   field lives only here, not on trees/blobs/tags/refs, exactly because it's the
   head a restore starts from, not a per-file concern), and, in snapshot mode,
   the parent's git sha as a plain field even when no parent claim exists to
-  cite (an honest record of what wasn't captured, not a broken reference).
+  cite (an honest record of what wasn't captured, not a broken reference). Also
+  carries `dated` (`V-DATED`): the commit's own author date (not committer —
+  closer to "when the subject stems from," and immune to a rebase moving the
+  latter), distinct from `created_at` (when the archive witnessed it, always
+  real now). Passed to `WithDatedEDTF` as git's own ISO 8601 output, unconverted
+  — `ranke-go` v0.25.1's instant branch accepts any RFC 3339 form, any offset,
+  so no reformatting is needed to keep full precision. (Originally reformatted
+  to `created_at`'s own exact UTC/nanosecond wire form, worked around a real
+  `ranke-go` bug — its EDTF Level 1 parser has no time-of-day at all, `sd-b071b2`
+  — since fixed upstream; `WithDatedEDTF` still names the setter, for whenever a
+  genuinely EDTF-only form — an interval, an uncertain year — is worth adding.)
 - **`source/git_tree`** — one claim per git tree object (one per directory
   level, nested — never flattened). Content is git's raw tree object bytes,
   external. Cites each entry (blob or subtree) via an edge carrying
@@ -52,7 +62,11 @@ own subtype prefix).
   claim itself — but it only ever reflects where THIS claim was first minted; a
   blob shared across paths or commits keeps citing the same claim, so its
   authoritative, per-occurrence path is the tree entry edge's own `path` field,
-  not this one.
+  not this one. Same story for `dated`: the owning commit's own author date at
+  first mint (the file's "captured at," not updated on reuse) — backup mode's
+  parent-first walk means this naturally lands as the oldest commit *in that
+  run's walk* to introduce the content, not a true git-blame first-introduction
+  across all of history, but cheap and honest about what it actually knows.
 - **`source/git_tag`** — one claim per *annotated* tag object (git's fourth
   object kind), carried exactly like commit/tree/blob: raw bytes, external,
   byte-exact. A *lightweight* tag has no such object — it's just a name pointing
