@@ -16,9 +16,8 @@ import (
 	"github.com/flocko-motion/ranke-go"
 )
 
-// gitPrefix namespaces every source/derivation subtype this tool mints —
-// bare words like "commit" invite collision in V-TYPE's shared vocabulary.
-// Just "git_": everything here is already ranke, no need to say so twice.
+// gitPrefix namespaces every source/derivation subtype — a bare word like
+// "commit" invites collision in V-TYPE's shared vocabulary.
 const gitPrefix = "git_"
 
 // The claim types this conversion produces.
@@ -241,6 +240,10 @@ func (c *converter) commit(sha string) (made, error) {
 	if len(parents) > 0 {
 		fields[parentShaField] = strings.Join(parents, ",")
 	}
+	dated, err := c.git.commitAuthorDate(sha)
+	if err != nil {
+		return made{}, fmt.Errorf("commit %s: author date: %w", sha, err)
+	}
 
 	var edges []ranke.Edge
 	var height uint64
@@ -267,7 +270,7 @@ func (c *converter) commit(sha string) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("commit %s: tree: %w", sha, err)
 	}
-	root, err := c.tree(treeSha, "")
+	root, err := c.tree(treeSha, "", dated)
 	if err != nil {
 		return made{}, err
 	}
@@ -286,7 +289,7 @@ func (c *converter) commit(sha string) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("commit %s: cat-file: %w", sha, err)
 	}
-	m, err := c.write(nodeCommit, payload, fields, height, edges)
+	m, err := c.write(nodeCommit, payload, fields, height, edges, dated)
 	if err != nil {
 		return made{}, fmt.Errorf("commit %s: %w", sha, err)
 	}
@@ -296,8 +299,9 @@ func (c *converter) commit(sha string) (made, error) {
 
 // tree converts one git tree: entries first (scope permitting), then itself,
 // citing each by name and mode. path is relative to the commit root ("" at
-// the top).
-func (c *converter) tree(sha, path string) (made, error) {
+// the top); dated is the owning commit's own date, passed through to blob
+// (a file's "first captured at" — trees stay purely structural, no dated).
+func (c *converter) tree(sha, path, dated string) (made, error) {
 	if m, ok := c.bySha[sha]; ok {
 		return m, nil
 	}
@@ -324,9 +328,9 @@ func (c *converter) tree(sha, path string) (made, error) {
 		var child made
 		switch e.typ {
 		case "blob":
-			child, err = c.blob(e.sha, entryPath)
+			child, err = c.blob(e.sha, entryPath, dated)
 		case "tree":
-			child, err = c.tree(e.sha, entryPath)
+			child, err = c.tree(e.sha, entryPath, dated)
 		default:
 			err = fmt.Errorf("entry %q: unsupported git object type %q", e.name, e.typ)
 		}
@@ -350,7 +354,7 @@ func (c *converter) tree(sha, path string) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("tree %s: cat-file: %w", sha, err)
 	}
-	m, err := c.write(nodeTree, payload, map[string]string{gitShaField: sha}, height, edges)
+	m, err := c.write(nodeTree, payload, map[string]string{gitShaField: sha}, height, edges, "")
 	if err != nil {
 		return made{}, fmt.Errorf("tree %s: %w", sha, err)
 	}
@@ -370,9 +374,11 @@ func (c *converter) markScopeSeen(entryPath string) {
 }
 
 // blob converts one git blob: content is the file's bytes exactly, so an
-// unchanged file shares one content_hash across trees; path just records
-// where THIS mint first saw it — a later citation's own edge tracks that.
-func (c *converter) blob(sha, path string) (made, error) {
+// unchanged file shares one content_hash across trees; path and dated just
+// record where/when THIS mint first saw it — a later citation's own edge
+// tracks its path, and dated is never authoritative for anything but the
+// commit that happened to introduce this exact content first.
+func (c *converter) blob(sha, path, dated string) (made, error) {
 	if m, ok := c.bySha[sha]; ok {
 		return m, nil
 	}
@@ -380,7 +386,7 @@ func (c *converter) blob(sha, path string) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("blob %s: cat-file: %w", sha, err)
 	}
-	m, err := c.write(nodeBlob, payload, map[string]string{gitShaField: sha, "path": path}, 0, nil)
+	m, err := c.write(nodeBlob, payload, map[string]string{gitShaField: sha, "path": path}, 0, nil, dated)
 	if err != nil {
 		return made{}, fmt.Errorf("blob %s: %w", sha, err)
 	}
@@ -447,7 +453,7 @@ func (c *converter) tag(sha string, commit made) (made, error) {
 	if err != nil {
 		return made{}, fmt.Errorf("tag %s: cat-file: %w", sha, err)
 	}
-	m, err := c.write(nodeTag, payload, map[string]string{gitShaField: sha}, commit.height, []ranke.Edge{edge})
+	m, err := c.write(nodeTag, payload, map[string]string{gitShaField: sha}, commit.height, []ranke.Edge{edge}, "")
 	if err != nil {
 		return made{}, fmt.Errorf("tag %s: %w", sha, err)
 	}
@@ -457,7 +463,7 @@ func (c *converter) tag(sha string, commit made) (made, error) {
 
 // write builds one git-object claim (external content, git_sha field, edges
 // resolved) — or, when prep already found this content, just reuses it.
-func (c *converter) write(typ string, payload []byte, fields map[string]string, childHeight uint64, edges []ranke.Edge) (made, error) {
+func (c *converter) write(typ string, payload []byte, fields map[string]string, childHeight uint64, edges []ranke.Edge, dated string) (made, error) {
 	id, err := ranke.HashContent(payload)
 	if err != nil {
 		return made{}, fmt.Errorf("hash content: %w", err)
@@ -472,6 +478,7 @@ func (c *converter) write(typ string, payload []byte, fields map[string]string, 
 		WithExternalContent(id, uint64(len(payload))).
 		WithEncoding(ranke.EncodingOctetStream).
 		WithCreatedAt(c.at).
+		WithDatedEDTF(dated).
 		WithHeight(childHeight + 1).
 		WithEdges(edges...)
 	for k, v := range fields {

@@ -63,6 +63,18 @@ func (g gitRepo) commitTree(sha string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// commitAuthorDate returns sha's author date, strict ISO 8601 (RFC 3339,
+// the offset as git itself recorded it) — when the change was authored,
+// closer to "when the subject stems from" than the committer date (which
+// can move on a rebase).
+func (g gitRepo) commitAuthorDate(sha string) (string, error) {
+	out, err := g.run("log", "-1", "--format=%aI", sha)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // commitParents returns sha's parent commit shas, in order — empty for a root commit.
 func (g gitRepo) commitParents(sha string) ([]string, error) {
 	out, err := g.run("log", "-1", "--format=%P", sha)
