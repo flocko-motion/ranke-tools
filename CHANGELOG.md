@@ -7,6 +7,8 @@ does not.
 
 ## Unreleased
 
+## v0.3.0 — 2026-09-02
+
 **The release cycle is ranke-graph's shared script, cached rather than
 vendored.** `scripts/release.sh` is gone. `make release` fetches
 `release-cycle.sh` from ranke-graph into `bin/`, which is gitignored, and runs it
