@@ -3,8 +3,15 @@
 # One Go module, one subdirectory per tool (see README.md). No generation step here —
 # unlike ranke-db, nothing in this repo is derived from a spec.
 
-RANKE_GRAPH_REPO ?= https://github.com/flocko-motion/ranke-graph
+RANKE_GRAPH_REPO ?= https://github.com/rankegraph/ranke-graph
 RANKE_GRAPH_REF  ?= main
+
+# release-cycle.sh lives in ranke-graph and serves every consumer repo, so the git
+# mechanics of a release are written once, there. Cached under bin/ (gitignored):
+# fetched infrastructure, never vendored, so this repo cannot drift from it.
+RANKE_GRAPH_RAW    := https://raw.githubusercontent.com/rankegraph/ranke-graph
+RELEASE_CYCLER     := bin/release-cycle.sh
+RELEASE_CYCLER_URL ?= $(RANKE_GRAPH_RAW)/$(RANKE_GRAPH_REF)/scripts/release-cycle.sh
 PAPERS_DIR       := docs/papers
 # Everything at the top of the paper repo is reference material and gets pulled;
 # these are the exceptions (its own tooling). Dotdirs never match the glob.
@@ -27,7 +34,7 @@ LDFLAGS ?=
 
 RANKE_DB_REPO ?= flocko-motion/ranke-db
 
-.PHONY: all help build test vet fmt lint check tidy docs docs-clean upgrade \
+.PHONY: all help build test vet fmt lint check tidy docs docs-clean upgrade check-clean-tree check-release-bump \
         release-gate release major minor patch breaking feature fix
 
 .DEFAULT_GOAL := all
@@ -110,11 +117,27 @@ upgrade: ## Bump server/.rankedb-version to ranke-db's latest release and instal
 		echo "$$latest" > server/.rankedb-version; \
 	fi
 	@./server/install.sh
+	@rm -f $(RELEASE_CYCLER)
+	@$(MAKE) $(RELEASE_CYCLER)
 
 release-gate: check ## Run the pre-release quality gate without releasing
 
-release: release-gate ## Release every tool as one bundle, same version (bump: major|minor|patch, aliases breaking|feature|fix)
-	@./scripts/release.sh $(filter major minor patch breaking feature fix,$(MAKECMDGOALS))
+# A dirty tree and a missing bump word are free, instant checks; release-gate is
+# not, so failing on them should not cost a build first.
+check-clean-tree:
+	@[ -z "$$(git status --porcelain)" ] || { echo "working tree is dirty — commit or stash before releasing" >&2; exit 1; }
+
+check-release-bump:
+	@[ -n "$(filter major minor patch breaking feature fix,$(MAKECMDGOALS))" ] || \
+		{ echo "usage: make release <major|breaking | minor|feature | patch|fix>" >&2; exit 1; }
+
+release: check-clean-tree check-release-bump release-gate $(RELEASE_CYCLER) ## Release every tool as one bundle, same version (bump: major|minor|patch, aliases breaking|feature|fix)
+	@$(RELEASE_CYCLER) $(filter major minor patch breaking feature fix,$(MAKECMDGOALS))
+
+$(RELEASE_CYCLER): ## Cache release-cycle.sh from ranke-graph (bin/ is gitignored — infra, never vendored)
+	@mkdir -p $(dir $(RELEASE_CYCLER))
+	@curl -fsSL $(RELEASE_CYCLER_URL) -o $(RELEASE_CYCLER)
+	@chmod +x $(RELEASE_CYCLER)
 
 major minor patch breaking feature fix:
 	@:
